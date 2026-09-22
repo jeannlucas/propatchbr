@@ -69,9 +69,6 @@ export function Footer() {
           </p>
           <p>
             Desenvolvido por{' '}
-            <span className="font-semibold text-zinc-300">Jeann Lucas</span>
-            {' '}||{' '}
-            <span className="text-zinc-400">CEO</span>{' '}
             <a
               href="https://bigdevz.com/"
               target="_blank"
