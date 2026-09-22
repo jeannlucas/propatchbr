@@ -2,7 +2,7 @@
 
 Plataforma moderna de comércio eletrônico e distribuição protegida de patches e mods para **Winning Eleven 10 (PS2 / OPL)**.
 
-O sistema automatiza todo o fluxo de ponta a ponta: autenticação social do usuário, checkout transparente via PIX (AbacatePay), concessão automática de licenças (*entitlements*) via webhooks e entrega de downloads seguros através de URLs assinadas.
+O sistema gerencia todo o fluxo de ponta a ponta: vitrine com menor preço de entrada, página de produto com seleção de modalidades (versão avulsa vs. período de atualizações), checkout transparente via PIX (AbacatePay), concessão automática de licenças (*entitlements*) via webhooks e entrega de downloads seguros através de URLs assinadas.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?style=for-the-badge&logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-007ACC?style=for-the-badge&logo=typescript&logoColor=white)
@@ -11,15 +11,35 @@ O sistema automatiza todo o fluxo de ponta a ponta: autenticação social do usu
 
 ---
 
+## 🎯 Regras de Negócio e Modalidades de Acesso
+
+O catálogo é estruturado no modelo **Vitrine ➔ Produto ➔ Escolha do Plano ➔ Compra**:
+
+### 1. Na Vitrine (Home)
+- Exibição focada e atraente apresentando apenas o **menor preço disponível**:
+  > **A partir de R$ 24,90**
+
+### 2. Na Página do Produto (`/produtos/[id]`)
+Ao acessar o produto, o cliente escolhe a modalidade de acesso desejada antes de seguir para o checkout:
+
+| Modalidade | Preço | Período de Atualizações | Descrição |
+| :--- | :--- | :--- | :--- |
+| **Versão Avulsa** | **R$ 24,90** | Nenhum (Acesso permanente à v1.0) | Compra da versão atual do patch para jogar imediatamente. *Não inclui atualizações futuras.* |
+| **Atualizações 30 dias** | **R$ 34,90** | 30 dias de atualizações | Versão atual + direito a todas as novas ISOs, correções e transferências lançadas em 30 dias. |
+| **Atualizações 90 dias** | **R$ 49,90** | 90 dias de atualizações | Melhor custo-benefício para a temporada: 3 meses completos de atualizações e suporte. |
+
+---
+
 ## ✨ Funcionalidades Principais
 
-- 🔐 **Autenticação Social:** Login seguro via Google gerenciado pelo Supabase Auth com persistência de sessão por cookies SSR.
-- 🛒 **Checkout PIX Automatizado:** Integração com AbacatePay para emissão instantânea de cobranças via PIX com metadados vinculados ao usuário.
-- ⚡ **Liberação Instantânea (Webhooks):** Processamento assíncrono de eventos `checkout.completed`, gerando o pedido e ativando a licença (*entitlement*) em tempo real.
-- 🛡️ **Download Protegido & Anti-Pirataria:** Arquivos hospedados em bucket privado com entrega via **URLs assinadas temporárias** geradas sob demanda para assinantes ativos.
-- ⏱️ **Modelos Flexíveis de Acesso:** Suporte a planos mensais (30 dias), trimestrais (90 dias) e licença vitalícia (*lifetime*).
-- 📊 **Dashboard do Cliente:** Painel onde o cliente acompanha seus patches ativos, validade de licenças, changelog de versões e links de download.
-- 🔒 **Segurança em Nível de Linha (RLS):** Todas as tabelas sensíveis protegidas no PostgreSQL por políticas de Row Level Security.
+- 🏷️ **Precificação Dinâmica e Centralizada:** Os valores e planos são gerenciados no banco de dados e sincronizados na AbacatePay, sem valores fixos no código.
+- 🔐 **Autenticação Social:** Login rápido via Google com gerenciamento de sessão pelo Supabase Auth (SSR).
+- 🛒 **Checkout PIX Automatizado:** Integração com AbacatePay com geração de link seguro e metadados vinculados ao usuário.
+- ⚡ **Liberação Instantânea (Webhooks):** Processamento de eventos `checkout.completed` que calcula automaticamente a validade da licença (`duration_days`) e concede o *entitlement* em tempo real.
+- 🛡️ **Download Protegido Anti-Pirataria:** Distribuição de arquivos ISO via Supabase Storage utilizando **Signed URLs temporárias** (expiram em 1 hora), acessíveis apenas por usuários com licença ativa.
+- 📊 **Dashboard do Cliente:** Painel onde o cliente acompanha seus patches ativos, datas de validade e gera links de download.
+- ⚙️ **Painel Administrativo (`/admin/planos`):** Interface para administradores editarem preços, nomes, prazos e IDs da gateway sem alterar código.
+- 🔒 **Row Level Security (RLS):** Banco de dados PostgreSQL totalmente blindado com políticas de segurança por usuário.
 
 ---
 
@@ -27,8 +47,8 @@ O sistema automatiza todo o fluxo de ponta a ponta: autenticação social do usu
 
 - **Frontend:** Next.js 16 (App Router, Server Actions, Turbopack), React 19, TypeScript, Tailwind CSS, Lucide React, Radix UI.
 - **Backend & Banco de Dados:** Supabase (PostgreSQL, Auth, Storage, Row Level Security).
-- **Validação de Dados:** Zod.
-- **Gateway de Pagamento:** AbacatePay API (PIX automatizado).
+- **Validação:** Zod.
+- **Gateway de Pagamento:** AbacatePay API v2 (PIX instantâneo).
 - **Hospedagem Recomendada:** Vercel.
 
 ---
@@ -39,20 +59,30 @@ O projeto adota uma arquitetura modular limpa e orientada a domínios:
 
 ```text
 src/
-├── app/               # Rotas e páginas (Next.js App Router)
-│   ├── api/           # Endpoints de API (checkout, webhooks, downloads)
-│   ├── dashboard/     # Painel autenticado do cliente
-│   ├── planos/        # Página de seleção de planos
-│   └── auth/          # Callbacks e fluxo de autenticação
-├── core/              # Contratos e tipos centrais de domínio
-├── infra/             # Integrações externas (Supabase, AbacatePay)
-│   ├── payments/      # Cliente e chamadas da AbacatePay
-│   └── supabase/      # Instâncias de cliente e servidor do Supabase
-├── modules/           # Módulos verticais de negócio
-│   ├── identity/      # Autenticação, perfis e ações de usuário
-│   ├── orders/        # Pedidos, planos e pagamentos
-│   └── products/      # Produtos, versões e entitlements
-└── middleware.ts      # Proteção de rotas e renovação de sessão Supabase
+├── app/                      # Rotas e páginas (Next.js App Router)
+│   ├── (public)/             # Rotas públicas abertas
+│   │   ├── page.tsx          # Vitrine com menor preço ('A partir de R$ 24,90')
+│   │   ├── produtos/[id]/    # Página do produto com seletor interativo de planos
+│   │   ├── checkout/         # Tela intermediária de checkout
+│   │   └── login/            # Autenticação Google / E-mail
+│   ├── (protected)/          # Rotas autenticadas
+│   │   └── dashboard/        # Painel do cliente e gerador de downloads
+│   ├── admin/                # Painel de administração
+│   │   └── planos/           # Gerenciamento dinâmico de preços e planos
+│   └── api/                  # Endpoints de backend
+│       ├── admin/plans/      # API de gestão de planos
+│       ├── checkout/         # Criação de cobrança na AbacatePay
+│       ├── webhooks/         # Webhook de confirmação PIX
+│       └── downloads/        # Gerador de URLs assinadas temporárias
+├── components/               # Componentes compartilhados (ex: Footer com redes sociais)
+├── core/                     # Entidades e contratos puros do domínio
+├── infra/                    # Clientes de infraestrutura (Supabase, AbacatePay)
+├── modules/                  # Módulos verticais de negócio
+│   ├── catalog/              # Repositórios e regras de produtos e planos
+│   ├── identity/             # Ações de usuário, perfil e autenticação
+│   ├── orders/               # Pedidos e cobranças
+│   └── entitlements/         # Concessão e validação de licenças
+└── middleware.ts             # Proteção de rotas e renovação de sessão Supabase
 ```
 
 ---
@@ -63,22 +93,24 @@ src/
 sequenceDiagram
     autonumber
     actor User as Cliente
-    participant Web as ProPatchBR (Next.js)
-    participant AP as AbacatePay
+    participant Vitrine as Vitrine (Home)
+    participant Produto as Página do Produto
+    participant AP as AbacatePay PIX
+    participant Webhook as API Webhook
     participant DB as Supabase (DB & Storage)
 
-    User->>Web: Seleciona um plano (ex: 30 dias / Vitalício)
-    Web->>AP: Cria checkout PIX com metadata (userId, planId)
-    AP-->>Web: Retorna URL de checkout
-    Web-->>User: Redireciona para pagamento via PIX
-    User->>AP: Conclui pagamento
-    AP->>Web: Dispara Webhook (checkout.completed)
-    Web->>DB: Atualiza status do pedido para 'paid'
-    Web->>DB: Cria registro na tabela 'entitlements' com validade
-    User->>Web: Acessa Dashboard e clica em 'Baixar Patch'
-    Web->>DB: Valida se o entitlement está ativo
-    DB-->>Web: Gera Signed URL com expiração
-    Web-->>User: Inicia o download seguro do arquivo
+    User->>Vitrine: Visualiza produto ("A partir de R$ 24,90")
+    User->>Produto: Acessa /produtos/[id]
+    User->>Produto: Seleciona modalidade (Avulsa / 30 dias / 90 dias)
+    User->>Produto: Clica em "COMPRE AGORA"
+    Produto->>AP: Cria checkout PIX com metadata (userId, planId)
+    AP-->>User: Apresenta QR Code / Copia e Cola PIX
+    User->>AP: Efetua pagamento
+    AP->>Webhook: Dispara evento checkout.completed
+    Webhook->>DB: Atualiza pedido para 'paid'
+    Webhook->>DB: Cria 'entitlement' com validade calculada (duration_days)
+    User->>DB: Acessa Dashboard e solicita download da ISO
+    DB-->>User: Entrega Signed URL segura temporária
 ```
 
 ---
@@ -107,7 +139,7 @@ npm install
 
 ### 3. Configure as variáveis de ambiente
 
-Crie o seu arquivo local a partir do modelo de exemplo:
+Crie o arquivo local a partir do modelo de exemplo:
 
 ```bash
 cp .env.example .env.local
@@ -132,10 +164,13 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 
 ### 4. Configure o Banco de Dados (Supabase)
 
-1. No painel do seu projeto Supabase, acesse a aba **SQL Editor**.
-2. Execute o conteúdo do arquivo `supabase/migrations/001_initial_schema.sql` para criar as tabelas (`profiles`, `products`, `product_versions`, `plans`, `orders`, `entitlements`, `download_logs`), enums e regras de RLS.
-3. No menu **Storage**, crie o bucket privado utilizado para armazenar os patches.
-4. No menu **Authentication > URL Configuration**, certifique-se de adicionar `http://localhost:3000/auth/callback` na lista de **Redirect URLs**.
+No painel do Supabase, acesse a aba **SQL Editor** e execute em ordem:
+1. `supabase/migrations/001_initial_schema.sql` (Estrutura básica de tabelas, enums e RLS).
+2. `supabase/migrations/002_update_plans_pricing.sql` (Novos planos, preços oficiais de R$ 24,90 / R$ 34,90 / R$ 49,90 e políticas públicas).
+
+No menu **Storage**, certifique-se de que existe o bucket privado `patches`.
+
+No menu **Authentication > URL Configuration**, cadastre `http://localhost:3000/auth/callback` nas **Redirect URLs**.
 
 ### 5. Inicie o servidor local
 
@@ -155,11 +190,11 @@ Para simular o recebimento de confirmações de pagamento da AbacatePay em desen
    ```bash
    ngrok http 3000
    ```
-2. No painel de desenvolvedor da AbacatePay, cadastre a URL pública gerada no seguinte formato:
+2. No painel de desenvolvedor da AbacatePay, cadastre a URL do webhook apontando para:
    ```text
    https://seu-dominio-ngrok.ngrok-free.app/api/webhooks/abacatepay
    ```
-3. Realize um pagamento em ambiente de testes/sandbox para verificar a criação automática da licença em `entitlements`.
+3. Realize um pagamento em modo Sandbox/Teste para validar a ativação automática do plano no banco de dados.
 
 ---
 
@@ -174,16 +209,16 @@ Para simular o recebimento de confirmações de pagamento da AbacatePay em desen
 
 ---
 
-## 📄 Licença
-
-Este projeto está sob a licença [MIT](LICENSE).
-
----
-
 ## 🌐 Redes Sociais da Comunidade
 
 - 📸 **Instagram:** [@propatchbr](https://www.instagram.com/propatchbr/)
 - 📺 **YouTube:** [@ProPatchBR](https://www.youtube.com/@ProPatchBR)
+
+---
+
+## 📄 Licença
+
+Este projeto está sob a licença [MIT](LICENSE).
 
 ---
 
