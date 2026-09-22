@@ -41,7 +41,7 @@ export async function middleware(request: NextRequest) {
   const { data: { session } } = await supabase.auth.getSession();
 
   // Se tentar acessar rota protegida sem sessão, redireciona para login
-  if (!session && request.nextUrl.pathname.startsWith('/dashboard')) {
+  if (!session && (request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/admin'))) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 

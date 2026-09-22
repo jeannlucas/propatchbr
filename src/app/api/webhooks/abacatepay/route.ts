@@ -38,10 +38,10 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ received: false, error: 'Order not found' }, { status: 404 });
       }
 
-      // Buscar o product_id real do plano
+      // Buscar o product_id e duration_days do plano
       const { data: plan } = await supabase
         .from('plans')
-        .select('product_id')
+        .select('product_id, duration_days, duration, name')
         .eq('id', order.plan_id)
         .single();
 
@@ -68,9 +68,11 @@ export async function POST(request: NextRequest) {
           metadata: metadata,
         }, { onConflict: 'gateway_payment_id' });
 
-      // Calcular validade
-      let validUntil = null;
-      if (metadata.plan_name?.includes('30 dias')) {
+      // Calcular validade de forma dinâmica com base em duration_days
+      let validUntil: string | null = null;
+      if (plan.duration_days && plan.duration_days > 0) {
+        validUntil = new Date(Date.now() + plan.duration_days * 24 * 60 * 60 * 1000).toISOString();
+      } else if (metadata.plan_name?.includes('30 dias')) {
         validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
       } else if (metadata.plan_name?.includes('90 dias')) {
         validUntil = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString();

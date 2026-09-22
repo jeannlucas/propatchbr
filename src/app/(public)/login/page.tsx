@@ -1,14 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { signIn, signUp, signInWithGoogle } from '@/modules/identity/use-cases/auth-actions';
 
-export default function LoginPage() {
+function LoginFormContent() {
   const searchParams = useSearchParams();
   const redirectUrl = searchParams.get('redirect') || '/dashboard';
 
   const [formAction, setFormAction] = useState<'signIn' | 'signUp'>('signIn');
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleGoogleSignIn = async (formData: FormData) => {
+    setErrorMsg(null);
+    const result = await signInWithGoogle(formData);
+    if (result?.error) {
+      setErrorMsg(result.error);
+    }
+  };
+
+  const handleSignIn = async (formData: FormData) => {
+    setErrorMsg(null);
+    const result = await signIn(formData);
+    if (result?.error) {
+      setErrorMsg(result.error);
+    }
+  };
+
+  const handleSignUp = async (formData: FormData) => {
+    setErrorMsg(null);
+    const result = await signUp(formData);
+    if (result?.error) {
+      setErrorMsg(result.error);
+    }
+  };
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:px-8">
@@ -31,8 +56,14 @@ export default function LoginPage() {
           </p>
         </div>
 
+        {errorMsg && (
+          <div className="rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-300 text-center">
+            {errorMsg}
+          </div>
+        )}
+
         {/* Botão Google */}
-        <form action={signInWithGoogle} className="space-y-4">
+        <form action={handleGoogleSignIn} className="space-y-4">
           <input type="hidden" name="redirect" value={redirectUrl} />
           <button
             type="submit"
@@ -93,7 +124,7 @@ export default function LoginPage() {
         <div className="mt-8">
           {formAction === 'signIn' ? (
             /* Formulário de Login */
-            <form action={signIn} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+            <form action={handleSignIn} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
               <input type="hidden" name="redirect" value={redirectUrl} />
               
               <div>
@@ -129,7 +160,7 @@ export default function LoginPage() {
             </form>
           ) : (
             /* Formulário de Cadastro */
-            <form action={signUp} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+            <form action={handleSignUp} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
               <input type="hidden" name="redirect" value={redirectUrl} />
               
               <div>
@@ -180,5 +211,19 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center bg-background">
+          <p className="text-sm text-zinc-400">Carregando...</p>
+        </div>
+      }
+    >
+      <LoginFormContent />
+    </Suspense>
   );
 }
