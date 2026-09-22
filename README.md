@@ -222,4 +222,4 @@ Este projeto está sob a licença [MIT](LICENSE).
 
 ---
 
-Desenvolvido por [BigDev.Z - IT Consulting](https://bigdevz.com/).
+Desenvolvido por **Jeann Lucas** || CEO [BigDev.Z - IT Consulting](https://bigdevz.com/).
