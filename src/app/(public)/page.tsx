@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Download, Trophy, Users, Gamepad2, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Download, Trophy, Users, ArrowRight, Sparkles, CheckCircle2 } from 'lucide-react';
 import { getProductWithPlans } from '@/modules/catalog/repositories/product-repository';
 import { formatPrice } from '@/lib/utils';
 import { Footer } from '@/components/Footer';
@@ -9,6 +9,8 @@ const features = [
   { icon: Users, title: 'Dados e Faces Reais', desc: 'Idade, altura, peso, atributos e pé dominante calibrados.' },
   { icon: Download, title: 'Transferências Atualizadas', desc: 'As contratações mais recentes do mercado da bola.' },
 ];
+
+export const dynamic = 'force-dynamic';
 
 export default async function HomePage() {
   const product = await getProductWithPlans();

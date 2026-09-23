@@ -1,60 +1,58 @@
-import { createServerClient } from '@supabase/ssr';
-import { NextResponse, type NextRequest } from 'next/server';
+import { NextResponse, type NextRequest } from "next/server";
+import { jwtVerify } from "jose";
+
+const COOKIE_NAME = "propatch_session";
+const SECRET_KEY = new TextEncoder().encode(
+  process.env.AUTH_SECRET || "propatch_super_secret_session_key_min_32_characters_long_2026"
+);
+
+interface SessionPayload {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+}
+
+async function verifyToken(token: string): Promise<SessionPayload | null> {
+  try {
+    const { payload } = await jwtVerify(token, SECRET_KEY);
+    return payload as unknown as SessionPayload;
+  } catch {
+    return null;
+  }
+}
 
 export async function middleware(request: NextRequest) {
-  let response = NextResponse.next({
-    request: {
-      headers: request.headers,
-    },
-  });
+  const token = request.cookies.get(COOKIE_NAME)?.value;
+  const session = token ? await verifyToken(token) : null;
+  const pathname = request.nextUrl.pathname;
 
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) {
-          return request.cookies.get(name)?.value;
-        },
-        set(name: string, value: string, options: any) {
-          request.cookies.set({ name, value, ...options });
-          response = NextResponse.next({
-            request: {
-              headers: request.headers,
-            },
-          });
-          response.cookies.set({ name, value, ...options });
-        },
-        remove(name: string, options: any) {
-          request.cookies.set({ name, value: '', ...options });
-          response = NextResponse.next({
-            request: {
-              headers: request.headers,
-            },
-          });
-          response.cookies.set({ name, value: '', ...options });
-        },
-      },
+  // Rotas que exigem autenticação
+  const isProtectedPath = pathname.startsWith("/dashboard") || pathname.startsWith("/admin");
+
+  if (!session && isProtectedPath) {
+    const redirectUrl = new URL("/login", request.url);
+    redirectUrl.searchParams.set("redirect", pathname);
+    return NextResponse.redirect(redirectUrl);
+  }
+
+  // Se já estiver logado e tentar acessar login ou cadastro
+  if (session && (pathname === "/login" || pathname === "/esqueci-senha")) {
+    return NextResponse.redirect(new URL("/dashboard", request.url));
+  }
+
+  // Rota de administração
+  if (pathname.startsWith("/admin")) {
+    if (!session || session.role !== "admin") {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
     }
-  );
-
-  const { data: { session } } = await supabase.auth.getSession();
-
-  // Se tentar acessar rota protegida sem sessão, redireciona para login
-  if (!session && (request.nextUrl.pathname.startsWith('/dashboard') || request.nextUrl.pathname.startsWith('/admin'))) {
-    return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  // Se já estiver logado e tentar acessar login, redireciona para dashboard
-  if (session && request.nextUrl.pathname === '/login') {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
-  }
-
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

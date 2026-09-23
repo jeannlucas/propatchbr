@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowLeft, Scale, ShieldCheck, Check, AlertCircle } from 'lucide-react';
+import { ArrowLeft, Scale, Check, AlertCircle } from 'lucide-react';
 import { Footer } from '@/components/Footer';
 
 export const metadata = {
@@ -64,7 +64,7 @@ export default function LicencaPage() {
             </h3>
             <ul className="text-xs text-zinc-400 space-y-1.5 leading-relaxed">
               <li>• Manter o aviso de direitos autorais (copyright) original.</li>
-              <li>• O software é fornecido "no estado em que se encontra" (as is).</li>
+              <li>• O software é fornecido &quot;no estado em que se encontra&quot; (as is).</li>
               <li>• Sem qualquer garantia expressa ou implícita de funcionamento.</li>
               <li>• Os autores não são responsáveis por danos resultantes do uso.</li>
             </ul>

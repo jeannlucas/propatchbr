@@ -8,11 +8,12 @@ import { Download, Package, Shield, Loader2, X, AlertCircle } from 'lucide-react
 interface Entitlement {
   id: string;
   valid_until: string | null;
-  metadata: any;
+  metadata: Record<string, unknown> | null;
   product_id: string;
   products: {
     name: string;
     product_versions: {
+      id?: string;
       version_name: string;
       storage_path: string;
     }[];
@@ -42,19 +43,13 @@ export default function DashboardClient({
     try {
       setDownloading(entitlement.id);
       
-      const storagePath = entitlement.products?.product_versions?.[0]?.storage_path;
-      
-      if (!storagePath) {
-        showToast('Arquivo ainda não está disponível para download. Tente novamente mais tarde.');
-        return;
-      }
+      const versionId = entitlement.products?.product_versions?.[0]?.id || entitlement.id;
 
       const response = await fetch('/api/downloads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          entitlementId: entitlement.id,
-          storagePath: storagePath,
+          versionId: versionId,
         }),
       });
 
@@ -103,49 +98,55 @@ export default function DashboardClient({
 
       {/* Header */}
       <header className="border-b border-border bg-card">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3">
-          <img
-            src="/logo.png"
-            alt="ProPatch BR"
-            className="h-28 w-auto"
-            style={{ background: 'transparent' }}
-          />
-          <div className="flex items-center gap-4">
-            <span className="text-sm text-zinc-400">{userEmail}</span>
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 sm:px-6 py-2.5">
+          <Link href="/">
+            <img
+              src="/logo.png"
+              alt="ProPatch BR"
+              className="h-14 sm:h-20 w-auto"
+              style={{ background: 'transparent' }}
+            />
+          </Link>
+          <div className="flex items-center gap-3 sm:gap-4">
+            <span className="text-xs sm:text-sm text-zinc-400 max-w-[130px] sm:max-w-xs truncate" title={userEmail}>
+              {userEmail}
+            </span>
             <form action={signOut}>
-              <button className="rounded-md bg-red-600/10 px-3 py-1.5 text-sm text-red-500 hover:bg-red-600/20">Sair</button>
+              <button className="rounded-xl border border-red-900/40 bg-red-950/20 px-3 py-1.5 text-xs sm:text-sm font-semibold text-red-400 hover:bg-red-900/40 transition">
+                Sair
+              </button>
             </form>
           </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl px-6 py-12">
+      <main className="mx-auto max-w-6xl px-4 sm:px-6 py-8 sm:py-12">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold">Olá, {profile?.full_name || 'Jogador'} </h1>
-          <p className="mt-1 text-zinc-400">Bem-vindo à sua área do cliente.</p>
+          <h1 className="text-2xl sm:text-3xl font-black">Olá, {profile?.full_name || 'Jogador'} </h1>
+          <p className="mt-1 text-sm text-zinc-400">Bem-vindo à sua área do cliente.</p>
         </div>
 
         {/* Stats */}
-        <div className="mb-10 grid gap-4 md:grid-cols-3">
-          <div className="rounded-lg border border-border bg-card p-6">
+        <div className="mb-10 grid gap-4 grid-cols-1 sm:grid-cols-3">
+          <div className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-sm">
             <Package className="mb-2 h-6 w-6 text-primary" />
-            <p className="text-sm text-zinc-400">Patches ativos</p>
+            <p className="text-xs sm:text-sm text-zinc-400 font-medium">Patches ativos</p>
             <p className="text-2xl font-bold">{entitlements?.length || 0}</p>
           </div>
-          <div className="rounded-lg border border-border bg-card p-6">
+          <div className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-sm">
             <Download className="mb-2 h-6 w-6 text-primary" />
-            <p className="text-sm text-zinc-400">Downloads disponíveis</p>
+            <p className="text-xs sm:text-sm text-zinc-400 font-medium">Downloads disponíveis</p>
             <p className="text-2xl font-bold">{entitlements?.length || 0}</p>
           </div>
-          <div className="rounded-lg border border-border bg-card p-6">
+          <div className="rounded-xl border border-border bg-card p-5 sm:p-6 shadow-sm">
             <Shield className="mb-2 h-6 w-6 text-primary" />
-            <p className="text-sm text-zinc-400">Status</p>
+            <p className="text-xs sm:text-sm text-zinc-400 font-medium">Status</p>
             <p className="text-2xl font-bold text-green-500">Ativo</p>
           </div>
         </div>
 
         {/* Entitlements */}
-        <h2 className="mb-4 text-xl font-semibold">Meus Patches</h2>
+        <h2 className="mb-4 text-xl font-bold">Meus Patches</h2>
         {entitlements && entitlements.length > 0 ? (
           <div className="grid gap-4">
             {entitlements.map((e) => {
@@ -155,25 +156,25 @@ export default function DashboardClient({
               const hasFile = !!e.products?.product_versions?.[0]?.storage_path;
               
               return (
-                <div key={e.id} className="rounded-lg border border-border bg-card p-6">
-                  <div className="flex items-center justify-between">
+                <div key={e.id} className="rounded-2xl border border-border bg-card p-5 sm:p-6 shadow-md">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                     <div>
-                      <h3 className="font-semibold">{productName} — v{version}</h3>
-                      <p className="text-sm text-zinc-400">
+                      <h3 className="font-bold text-base sm:text-lg text-foreground">{productName} — v{version}</h3>
+                      <p className="text-xs sm:text-sm text-zinc-400 mt-0.5">
                         {e.valid_until 
-                          ? `Acesso até ${new Date(e.valid_until).toLocaleDateString('pt-BR')}`
-                          : 'Acesso vitalício à versão'}
+                          ? `Acesso a novas versões até ${new Date(e.valid_until).toLocaleDateString('pt-BR')}`
+                          : 'Acesso permanente à versão adquirida'}
                       </p>
                     </div>
                     <button 
                       onClick={() => handleDownload(e)}
                       disabled={isDownloading || !hasFile}
-                      className={`rounded-md px-4 py-2 text-sm font-semibold flex items-center gap-2 transition-all ${
+                      className={`w-full sm:w-auto rounded-xl px-5 py-2.5 text-xs sm:text-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 transition-all cursor-pointer ${
                         !hasFile
                           ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed'
                           : isDownloading
                           ? 'bg-zinc-700 text-zinc-300 cursor-wait'
-                          : 'bg-primary text-primary-foreground hover:bg-green-700'
+                          : 'bg-primary text-primary-foreground hover:bg-green-600 shadow-md shadow-green-900/30'
                       }`}
                     >
                       {isDownloading ? (

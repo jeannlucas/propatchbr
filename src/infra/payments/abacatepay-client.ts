@@ -41,7 +41,7 @@ export class AbacatePayClient {
         const error = JSON.parse(responseBody);
         console.error('AbacatePay API Error Details:', error);
         throw new Error(error.message || 'Failed to create payment');
-      } catch (parseError) {
+      } catch {
         console.error('Failed to parse error response:', responseBody);
         throw new Error(`API Error ${response.status}: ${response.statusText}`);
       }

@@ -1,76 +1,109 @@
-import { createClient } from '@/infra/supabase/server';
-import { Product, Plan } from '../types';
+import { db } from "@/infra/db";
+import { products, plans, productVersions } from "@/infra/db/schema";
+import { eq, desc, asc } from "drizzle-orm";
+import { Product, Plan } from "../types";
 
 export async function getProductWithPlans(productId?: string): Promise<Product | null> {
-  const supabase = await createClient();
+  try {
+    const productRecord = await db.query.products.findFirst({
+      where: productId ? eq(products.id, productId) : eq(products.active, true),
+      with: {
+        versions: {
+          orderBy: [desc(productVersions.createdAt)],
+        },
+        plans: {
+          where: eq(plans.active, true),
+          orderBy: [asc(plans.priceCents)],
+        },
+      },
+    });
 
-  // Se não foi passado um ID específico, busca o primeiro produto ativo
-  let query = supabase
-    .from('products')
-    .select('*, product_versions(*)')
-    .eq('is_active', true);
+    if (!productRecord) return null;
 
-  if (productId) {
-    query = query.eq('id', productId);
-  }
+    const formattedPlans: Plan[] = productRecord.plans.map((p) => ({
+      id: p.id,
+      product_id: p.productId,
+      name: p.name,
+      price_cents: p.priceCents,
+      duration: p.durationDays ? `days_${p.durationDays}` : "lifetime",
+      duration_days: p.durationDays,
+      is_active: p.active,
+      badge: p.badge,
+      description: p.description,
+      features: p.features || [],
+    }));
 
-  const { data: product, error: productError } = await query.order('created_at', { ascending: true }).limit(1).maybeSingle();
-
-  if (productError || !product) {
-    console.error('Error fetching product:', productError);
+    return {
+      id: productRecord.id,
+      name: productRecord.name,
+      description: productRecord.description,
+      base_game: "Winning Eleven 10 (PS2)",
+      is_active: productRecord.active,
+      created_at: productRecord.createdAt.toISOString(),
+      product_versions: productRecord.versions.map((v) => ({
+        id: v.id,
+        product_id: v.productId,
+        version_name: v.version,
+        release_date: v.createdAt.toISOString(),
+        storage_path: v.storagePath,
+        file_size_bytes: v.fileSizeBytes || 0,
+        changelog: v.changelog,
+      })),
+      plans: formattedPlans,
+    };
+  } catch (error) {
+    console.error("Error fetching product with plans:", error);
     return null;
   }
-
-  // Buscar planos ativos associados ao produto, ordenados pelo menor preço
-  const { data: plans, error: plansError } = await supabase
-    .from('plans')
-    .select('*')
-    .eq('product_id', product.id)
-    .eq('is_active', true)
-    .order('price_cents', { ascending: true });
-
-  if (plansError) {
-    console.error('Error fetching plans for product:', plansError);
-  }
-
-  return {
-    ...product,
-    plans: plans || [],
-  };
 }
 
 export async function getAllProductsWithPlans(): Promise<Product[]> {
-  const supabase = await createClient();
+  try {
+    const productRecords = await db.query.products.findMany({
+      where: eq(products.active, true),
+      with: {
+        versions: {
+          orderBy: [desc(productVersions.createdAt)],
+        },
+        plans: {
+          where: eq(plans.active, true),
+          orderBy: [asc(plans.priceCents)],
+        },
+      },
+      orderBy: [asc(products.createdAt)],
+    });
 
-  const { data: products, error: productsError } = await supabase
-    .from('products')
-    .select('*, product_versions(*)')
-    .eq('is_active', true)
-    .order('created_at', { ascending: true });
-
-  if (productsError || !products) {
-    console.error('Error fetching products:', productsError);
+    return productRecords.map((prod) => ({
+      id: prod.id,
+      name: prod.name,
+      description: prod.description,
+      base_game: "Winning Eleven 10 (PS2)",
+      is_active: prod.active,
+      created_at: prod.createdAt.toISOString(),
+      product_versions: prod.versions.map((v) => ({
+        id: v.id,
+        product_id: v.productId,
+        version_name: v.version,
+        release_date: v.createdAt.toISOString(),
+        storage_path: v.storagePath,
+        file_size_bytes: v.fileSizeBytes || 0,
+        changelog: v.changelog,
+      })),
+      plans: prod.plans.map((p) => ({
+        id: p.id,
+        product_id: p.productId,
+        name: p.name,
+        price_cents: p.priceCents,
+        duration: p.durationDays ? `days_${p.durationDays}` : "lifetime",
+        duration_days: p.durationDays,
+        is_active: p.active,
+        badge: p.badge,
+        description: p.description,
+        features: p.features || [],
+      })),
+    }));
+  } catch (error) {
+    console.error("Error fetching all products with plans:", error);
     return [];
   }
-
-  const { data: allPlans, error: plansError } = await supabase
-    .from('plans')
-    .select('*')
-    .eq('is_active', true)
-    .order('price_cents', { ascending: true });
-
-  if (plansError) {
-    console.error('Error fetching plans:', plansError);
-  }
-
-  const plansByProduct = (allPlans || []).reduce<Record<string, Plan[]>>((acc, plan) => {
-    if (!acc[plan.product_id]) acc[plan.product_id] = [];
-    acc[plan.product_id].push(plan);
-    return acc;
-  }, {});
-
-  return products.map((prod) => ({
-    ...prod,
-    plans: plansByProduct[prod.id] || [],
-  }));
 }

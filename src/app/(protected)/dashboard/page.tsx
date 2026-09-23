@@ -1,67 +1,62 @@
-import { createClient } from '@/infra/supabase/server';
-import { redirect } from 'next/navigation';
-import DashboardClient from './DashboardClient';
+import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth/session";
+import { db } from "@/infra/db";
+import { licenses, profiles, productVersions } from "@/infra/db/schema";
+import { eq, desc } from "drizzle-orm";
+import DashboardClient from "./DashboardClient";
 
 export default async function DashboardPage() {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  
-  if (!user) redirect('/login');
+  const session = await getSession();
 
-  // Buscar perfil
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('full_name')
-    .eq('id', user.id)
-    .single();
-
-  // Buscar entitlements com product_id
-  const { data: entitlements } = await supabase
-    .from('entitlements')
-    .select('id, valid_until, metadata, product_id')
-    .eq('user_id', user.id);
-
-  console.log('=== DASHBOARD DEBUG ===');
-  console.log('User:', user.email);
-  console.log('Entitlements:', entitlements);
-
-  // Buscar product_versions diretamente
-  let entitlementsWithVersions = [];
-  
-  if (entitlements && entitlements.length > 0) {
-    for (const ent of entitlements) {
-      // Buscar a versão do produto associada
-      const { data: versions } = await supabase
-        .from('product_versions')
-        .select('version_name, storage_path, product_id')
-        .eq('product_id', ent.product_id);
-
-      console.log(`Versions for product ${ent.product_id}:`, versions);
-
-      // Buscar o nome do produto
-      const { data: product } = await supabase
-        .from('products')
-        .select('name')
-        .eq('id', ent.product_id)
-        .single();
-
-      entitlementsWithVersions.push({
-        ...ent,
-        products: product ? {
-          name: product.name,
-          product_versions: versions || []
-        } : null
-      });
-    }
+  if (!session?.id) {
+    redirect("/login");
   }
 
-  console.log('Final entitlements:', entitlementsWithVersions);
+  // 1. Buscar perfil do usuário
+  const profile = await db.query.profiles.findFirst({
+    where: eq(profiles.id, session.id),
+  });
+
+  // 2. Buscar licenças do usuário
+  const userLicenses = await db.query.licenses.findMany({
+    where: eq(licenses.userId, session.id),
+    orderBy: [desc(licenses.createdAt)],
+    with: {
+      product: {
+        with: {
+          versions: {
+            orderBy: [desc(productVersions.createdAt)],
+          },
+        },
+      },
+    },
+  });
+
+  // 3. Formatar para o DashboardClient
+  const formattedEntitlements = userLicenses.map((lic) => {
+    return {
+      id: lic.id,
+      valid_until: lic.expiresAt ? lic.expiresAt.toISOString() : null,
+      metadata: null,
+      product_id: lic.productId,
+      products: lic.product
+        ? {
+            name: lic.product.name,
+            product_versions: lic.product.versions.map((v) => ({
+              id: v.id,
+              version_name: v.version,
+              storage_path: v.storagePath,
+            })),
+          }
+        : null,
+    };
+  });
 
   return (
-    <DashboardClient 
-      entitlements={entitlementsWithVersions} 
-      profile={profile}
-      userEmail={user.email || ''}
+    <DashboardClient
+      entitlements={formattedEntitlements}
+      profile={profile ? { full_name: profile.name } : { full_name: session.name }}
+      userEmail={session.email}
     />
   );
 }

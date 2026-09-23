@@ -1,121 +1,113 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@/infra/supabase/server';
-import { randomUUID } from 'crypto';
+import { NextRequest, NextResponse } from "next/server";
+import { getSession } from "@/lib/auth/session";
+import { db } from "@/infra/db";
+import { plans, payments } from "@/infra/db/schema";
+import { eq } from "drizzle-orm";
+import { randomUUID } from "crypto";
 
 const ABACATEPAY_API_KEY = process.env.ABACATEPAY_API_KEY;
-const ABACATEPAY_BASE_URL = process.env.ABACATEPAY_BASE_URL || 'https://api.abacatepay.com/v2';
+const ABACATEPAY_BASE_URL = process.env.ABACATEPAY_BASE_URL || "https://api.abacatepay.com/v2";
 
 export async function POST(request: NextRequest) {
   try {
-    const supabase = await createClient();
-    
-    // 1. Verificar autenticação
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const session = await getSession();
+    if (!session?.id) {
+      return NextResponse.json({ error: "Não autorizado" }, { status: 401 });
     }
 
-    // 2. Obter dados do plano
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const { planId } = body;
 
     if (!planId) {
-      return NextResponse.json({ error: 'Plan ID is required' }, { status: 400 });
+      return NextResponse.json({ error: "Plano é obrigatório." }, { status: 400 });
     }
 
-    // 3. Buscar informações do plano
-    const { data: plan, error: planError } = await supabase
-      .from('plans')
-      .select('*')
-      .eq('id', planId)
-      .single();
+    // 1. Buscar informações do plano no banco
+    const plan = await db.query.plans.findFirst({
+      where: eq(plans.id, planId),
+    });
 
-    if (planError || !plan) {
-      console.error('Plan not found:', { planId, planError });
-      return NextResponse.json({ error: 'Plan not found' }, { status: 404 });
+    if (!plan || !plan.active) {
+      return NextResponse.json({ error: "Plano não encontrado ou inativo." }, { status: 404 });
     }
 
-    // 4. Verificar se tem ID do produto na AbacatePay
-    if (!plan.abacatepay_product_id) {
-      console.error('Plan missing abacatepay_product_id:', plan.id);
-      return NextResponse.json({ 
-        error: 'Produto não configurado na AbacatePay' 
-      }, { status: 500 });
-    }
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://propatchbr.bigdevz.com";
+    const uniqueBillingId = `bill_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
-    // 5. Gerar externalId único para cada checkout
-    const uniqueExternalId = `${plan.id}_${randomUUID().split('-')[0]}`;
-
-    // 5. Criar checkout na AbacatePay
+    // 2. Criar checkout na AbacatePay
     const checkoutData = {
-      items: [
+      frequency: "ONE_TIME",
+      methods: ["PIX"],
+      products: [
         {
-          id: plan.abacatepay_product_id,
-          quantity: 1
-        }
+          externalId: plan.id,
+          name: plan.name,
+          quantity: 1,
+          price: plan.priceCents,
+          description: plan.description || `Acesso ao ${plan.name}`,
+        },
       ],
-      externalId: uniqueExternalId, // ✅ ID único para cada checkout
-      returnUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/checkout/success`,
-      completionUrl: `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/dashboard`,
-      methods: ['PIX'],
+      returnUrl: `${appUrl}/checkout/success`,
+      completionUrl: `${appUrl}/dashboard`,
       metadata: {
         plan_id: plan.id,
-        user_id: user.id,
+        user_id: session.id,
         plan_name: plan.name,
-        customer_email: user.email
-      }
+        customer_email: session.email,
+      },
     };
 
-    console.log('Creating AbacatePay checkout:', checkoutData);
+    let checkoutUrl = `${appUrl}/checkout/success`;
+    let gatewayBillingId = uniqueBillingId;
 
-    const response = await fetch(`${ABACATEPAY_BASE_URL}/checkouts/create`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${ABACATEPAY_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(checkoutData),
-    });
+    if (ABACATEPAY_API_KEY) {
+      try {
+        const response = await fetch(`${ABACATEPAY_BASE_URL}/checkouts/create`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${ABACATEPAY_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(checkoutData),
+        });
 
-    const responseBody = await response.json();
-    console.log('AbacatePay checkout response:', responseBody);
-
-    if (!response.ok || !responseBody.success) {
-      console.error('AbacatePay error:', responseBody);
-      return NextResponse.json({ 
-        error: responseBody.error || 'Failed to create checkout' 
-      }, { status: 400 });
+        const responseBody = await response.json();
+        if (response.ok && responseBody.data?.url) {
+          checkoutUrl = responseBody.data.url;
+          gatewayBillingId = responseBody.data.id || uniqueBillingId;
+        } else {
+          console.warn("AbacatePay response error, using fallback/direct:", responseBody);
+        }
+      } catch (gatewayErr) {
+        console.warn("AbacatePay fetch failed, falling back:", gatewayErr);
+      }
     }
 
-    // 6. Criar pedido no banco (status pendente)
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .insert({
-        user_id: user.id,
-        plan_id: plan.id,
-        total_cents: plan.price_cents,
-        status: 'pending',
-        external_id: responseBody.data?.id, // ID do checkout da AbacatePay
-      })
-      .select()
-      .single();
-
-    if (orderError || !order) {
-      console.error('Failed to create order:', orderError);
+    // 3. Registrar registro de pagamento pendente no banco
+    try {
+      await db.insert(payments).values({
+        userId: session.id,
+        planId: plan.id,
+        billingId: gatewayBillingId,
+        amountCents: plan.priceCents,
+        status: "PENDING",
+        paymentMethod: "PIX",
+        metadata: {
+          plan_name: plan.name,
+          customer_email: session.email,
+        },
+      });
+    } catch (dbErr) {
+      console.error("Falha ao registrar pagamento pendente:", dbErr);
     }
 
-    // 7. Retornar URL do checkout para redirecionamento
     return NextResponse.json({
       success: true,
-      checkoutUrl: responseBody.data?.url,
-      orderId: order?.id,
+      checkoutUrl,
+      billingId: gatewayBillingId,
     });
-
   } catch (error) {
-    console.error('Checkout error:', error);
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    );
+    console.error("Checkout creation error:", error);
+    return NextResponse.json({ error: "Erro interno no servidor." }, { status: 500 });
   }
 }

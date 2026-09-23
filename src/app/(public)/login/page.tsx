@@ -2,7 +2,9 @@
 
 import { useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { signIn, signUp, signInWithGoogle } from '@/modules/identity/use-cases/auth-actions';
+import Link from 'next/link';
+import { Loader2 } from 'lucide-react';
+import { signIn, signUp } from '@/modules/identity/use-cases/auth-actions';
 
 function LoginFormContent() {
   const searchParams = useSearchParams();
@@ -10,18 +12,15 @@ function LoginFormContent() {
 
   const [formAction, setFormAction] = useState<'signIn' | 'signUp'>('signIn');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  const handleGoogleSignIn = async (formData: FormData) => {
-    setErrorMsg(null);
-    const result = await signInWithGoogle(formData);
-    if (result?.error) {
-      setErrorMsg(result.error);
-    }
-  };
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   const handleSignIn = async (formData: FormData) => {
     setErrorMsg(null);
+    setSuccessMsg(null);
+    setLoading(true);
     const result = await signIn(formData);
+    setLoading(false);
     if (result?.error) {
       setErrorMsg(result.error);
     }
@@ -29,14 +28,26 @@ function LoginFormContent() {
 
   const handleSignUp = async (formData: FormData) => {
     setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const password = formData.get('password') as string;
+    const confirmPassword = formData.get('confirm_password') as string;
+
+    if (password !== confirmPassword) {
+      setErrorMsg('As senhas não coincidem.');
+      return;
+    }
+
+    setLoading(true);
     const result = await signUp(formData);
+    setLoading(false);
     if (result?.error) {
       setErrorMsg(result.error);
     }
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:px-8">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-4 py-12 sm:px-6 lg:px-8 selection:bg-green-600 selection:text-white">
       <div className="w-full max-w-md space-y-8">
         {/* LOGO */}
         <div className="flex justify-center">
@@ -57,49 +68,16 @@ function LoginFormContent() {
         </div>
 
         {errorMsg && (
-          <div className="rounded-lg border border-red-800 bg-red-950/50 p-3 text-sm text-red-300 text-center">
+          <div className="rounded-xl border border-red-800 bg-red-950/50 p-3.5 text-sm text-red-300 text-center animate-in fade-in duration-200">
             {errorMsg}
           </div>
         )}
 
-        {/* Botão Google */}
-        <form action={handleGoogleSignIn} className="space-y-4">
-          <input type="hidden" name="redirect" value={redirectUrl} />
-          <button
-            type="submit"
-            className="flex w-full items-center justify-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm font-semibold text-foreground shadow-sm hover:bg-zinc-800 transition-colors"
-          >
-            <svg className="h-5 w-5" viewBox="0 0 24 24">
-              <path
-                fill="currentColor"
-                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-              />
-              <path
-                fill="currentColor"
-                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-              />
-              <path
-                fill="currentColor"
-                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-              />
-              <path
-                fill="currentColor"
-                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-              />
-            </svg>
-            Continuar com Google
-          </button>
-        </form>
-
-        {/* Divisor */}
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-zinc-800" />
+        {successMsg && (
+          <div className="rounded-xl border border-green-800 bg-green-950/70 p-3.5 text-sm text-green-300 text-center animate-in fade-in duration-200">
+            {successMsg}
           </div>
-          <div className="relative flex justify-center text-sm">
-            <span className="bg-background px-2 text-zinc-500">ou continue com e-mail</span>
-          </div>
-        </div>
+        )}
 
         {/* Toggle Login/Cadastro */}
         <div className="flex rounded-lg border border-border bg-card p-1">
@@ -124,87 +102,128 @@ function LoginFormContent() {
         <div className="mt-8">
           {formAction === 'signIn' ? (
             /* Formulário de Login */
-            <form action={handleSignIn} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+            <form action={handleSignIn} className="space-y-4 rounded-2xl border border-border bg-card p-6 shadow-xl">
               <input type="hidden" name="redirect" value={redirectUrl} />
               
               <div>
-                <label htmlFor="email" className="block text-sm font-medium text-zinc-300">E-mail</label>
+                <label htmlFor="email" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">E-mail</label>
                 <input
                   id="email"
                   name="email"
                   type="email"
                   required
-                  className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
                   placeholder="seu@email.com"
                 />
               </div>
 
               <div>
-                <label htmlFor="password" className="block text-sm font-medium text-zinc-300">Senha</label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label htmlFor="password" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400">Senha</label>
+                  <Link
+                    href="/esqueci-senha"
+                    className="text-xs text-primary hover:underline"
+                  >
+                    Esqueceu a senha?
+                  </Link>
+                </div>
                 <input
                   id="password"
                   name="password"
                   type="password"
                   required
-                  className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
                   placeholder="••••••••"
                 />
               </div>
 
               <button
                 type="submit"
-                className="flex w-full justify-center rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground shadow-sm hover:bg-green-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary transition-colors"
+                disabled={loading}
+                className="flex w-full justify-center items-center gap-2 rounded-xl bg-primary py-3 px-4 text-sm font-bold uppercase tracking-wider text-primary-foreground shadow-lg shadow-green-900/30 hover:bg-green-600 transition-colors disabled:opacity-50 cursor-pointer"
               >
-                Entrar
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Entrando...</span>
+                  </>
+                ) : (
+                  <span>Entrar</span>
+                )}
               </button>
             </form>
           ) : (
             /* Formulário de Cadastro */
-            <form action={handleSignUp} className="space-y-4 rounded-lg border border-border bg-card p-6 shadow-sm">
+            <form action={handleSignUp} className="space-y-4 rounded-2xl border border-border bg-card p-6 shadow-xl">
               <input type="hidden" name="redirect" value={redirectUrl} />
               
               <div>
-                <label htmlFor="full_name" className="block text-sm font-medium text-zinc-300">Nome Completo</label>
+                <label htmlFor="full_name" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Nome Completo</label>
                 <input
                   id="full_name"
                   name="full_name"
                   type="text"
                   required
-                  className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  maxLength={100}
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
                   placeholder="Seu Nome"
                 />
               </div>
 
               <div>
-                <label htmlFor="signup_email" className="block text-sm font-medium text-zinc-300">E-mail</label>
+                <label htmlFor="signup_email" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">E-mail</label>
                 <input
                   id="signup_email"
                   name="email"
                   type="email"
                   required
-                  className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  maxLength={100}
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
                   placeholder="seu@email.com"
                 />
               </div>
 
               <div>
-                <label htmlFor="signup_password" className="block text-sm font-medium text-zinc-300">Senha (mín. 6 caracteres)</label>
+                <label htmlFor="signup_password" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Senha (mín. 6 caracteres)</label>
                 <input
                   id="signup_password"
                   name="password"
                   type="password"
                   required
                   minLength={6}
-                  className="mt-1 block w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                  maxLength={100}
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
+                  placeholder="••••••••"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="confirm_password" className="block text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-1.5">Confirmar Senha</label>
+                <input
+                  id="confirm_password"
+                  name="confirm_password"
+                  type="password"
+                  required
+                  minLength={6}
+                  maxLength={100}
+                  className="block w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3.5 py-2.5 text-sm text-foreground placeholder-zinc-500 focus:border-primary focus:outline-none"
                   placeholder="••••••••"
                 />
               </div>
 
               <button
                 type="submit"
-                className="flex w-full justify-center rounded-md border border-zinc-600 bg-transparent px-3 py-2 text-sm font-semibold text-foreground shadow-sm hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-zinc-600 transition-colors"
+                disabled={loading}
+                className="flex w-full justify-center items-center gap-2 rounded-xl bg-primary py-3 px-4 text-sm font-bold uppercase tracking-wider text-primary-foreground shadow-lg shadow-green-900/30 hover:bg-green-600 transition-colors disabled:opacity-50 cursor-pointer"
               >
-                Cadastrar
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Cadastrando...</span>
+                  </>
+                ) : (
+                  <span>Criar Conta</span>
+                )}
               </button>
             </form>
           )}

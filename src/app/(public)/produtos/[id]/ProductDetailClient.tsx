@@ -15,9 +15,10 @@ import {
   MessageCircle,
   HelpCircle,
   FileCheck2,
-  Tv
+  Tv,
+  Loader2
 } from 'lucide-react';
-import { Product, Plan } from '@/modules/catalog/types';
+import { Product } from '@/modules/catalog/types';
 import { formatPrice } from '@/lib/utils';
 import { Footer } from '@/components/Footer';
 
@@ -32,11 +33,13 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
   // Plano padrão: segundo plano (30 dias) ou o primeiro caso só exista um
   const defaultPlan = plans.length > 1 ? plans[1] : plans[0];
   const [selectedPlanId, setSelectedPlanId] = useState<string>(defaultPlan?.id || '');
+  const [isNavigating, setIsNavigating] = useState(false);
 
   const selectedPlan = plans.find((p) => p.id === selectedPlanId) || defaultPlan;
 
   const handleBuy = () => {
-    if (!selectedPlan) return;
+    if (!selectedPlan || isNavigating) return;
+    setIsNavigating(true);
     router.push(`/checkout?plan=${selectedPlan.id}`);
   };
 
@@ -144,12 +147,12 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
                 </div>
               </div>
               <a
-                href="https://wa.me/?text=Ol%C3%A1,%20gostaria%20de%20tirar%20uma%20d%C3%BAvida%20sobre%20o%20Pro%20Patch%20BR"
+                href={process.env.NEXT_PUBLIC_WHATSAPP_URL || "https://www.instagram.com/propatchbr/"}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="shrink-0 rounded-lg border border-green-700 bg-green-900/40 px-3.5 py-2 text-xs font-semibold text-green-300 hover:bg-green-800/60 transition"
               >
-                Falar no WhatsApp
+                Suporte Oficial
               </a>
             </div>
           </div>
@@ -201,7 +204,16 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
                   return (
                     <div
                       key={plan.id}
+                      role="radio"
+                      aria-checked={isSelected}
+                      tabIndex={0}
                       onClick={() => setSelectedPlanId(plan.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === ' ' || e.key === 'Enter') {
+                          e.preventDefault();
+                          setSelectedPlanId(plan.id);
+                        }
+                      }}
                       className={`relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:p-5 cursor-pointer transition-all duration-200 select-none ${
                         isSelected
                           ? 'border-primary bg-green-950/20 shadow-lg shadow-green-950/40 ring-2 ring-primary/40'
@@ -221,9 +233,9 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
 
                       {/* Lado Esquerdo: Radio + Detalhes do Plano */}
                       <div className="flex items-start gap-3.5">
-                        <div className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all ${
+                        <div className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all ${
                           isSelected ? 'border-primary bg-primary' : 'border-zinc-600 bg-transparent'
-                        }">
+                        }`}>
                           {isSelected && <div className="h-2 w-2 rounded-full bg-black" />}
                         </div>
 
@@ -284,10 +296,20 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
             <div className="space-y-3 pt-2">
               <button
                 onClick={handleBuy}
-                className="w-full rounded-xl bg-primary py-4 px-6 text-center text-lg font-black uppercase tracking-wider text-primary-foreground shadow-xl shadow-green-900/30 transition-all hover:bg-green-600 hover:scale-[1.01] active:scale-[0.99] flex items-center justify-center gap-3 cursor-pointer"
+                disabled={isNavigating}
+                className="w-full rounded-xl bg-primary py-4 px-6 text-center text-lg font-black uppercase tracking-wider text-primary-foreground shadow-xl shadow-green-900/30 transition-all hover:bg-green-600 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-75 disabled:pointer-events-none flex items-center justify-center gap-3 cursor-pointer"
               >
-                <span>COMPRE AGORA — {selectedPlan ? formatPrice(selectedPlan.price_cents) : ''}</span>
-                <ArrowRight className="h-5 w-5" />
+                {isNavigating ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                    <span>Iniciando Checkout Seguro...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>COMPRE AGORA — {selectedPlan ? formatPrice(selectedPlan.price_cents) : ''}</span>
+                    <ArrowRight className="h-5 w-5" />
+                  </>
+                )}
               </button>
 
               <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-zinc-400 pt-1">

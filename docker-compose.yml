@@ -1,0 +1,52 @@
+services:
+  propatch-postgres:
+    image: postgres:16-alpine
+    container_name: propatch_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-propatch_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-propatch_secret_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-propatch_db}
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-propatch_user} -d ${POSTGRES_DB:-propatch_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - propatch_net
+
+  propatch-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: propatch_app
+    restart: unless-stopped
+    depends_on:
+      propatch-postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:3002:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-propatch_user}:${POSTGRES_PASSWORD:-propatch_secret_2026}@propatch-postgres:5432/${POSTGRES_DB:-propatch_db}
+      AUTH_SECRET: ${AUTH_SECRET:-propatch_super_secret_session_key_min_32_characters_long_2026}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://propatchbr.bigdevz.com}
+      STORAGE_LOCAL_PATH: /app/storage/patches
+      ABACATEPAY_API_KEY: ${ABACATEPAY_API_KEY}
+      ABACATEPAY_WEBHOOK_SECRET: ${ABACATEPAY_WEBHOOK_SECRET}
+      ABACATEPAY_BASE_URL: ${ABACATEPAY_BASE_URL:-https://api.abacatepay.com/v2}
+    volumes:
+      - patches_data:/app/storage/patches
+    networks:
+      - propatch_net
+
+volumes:
+  postgres_data:
+  patches_data:
+
+networks:
+  propatch_net:
+    driver: bridge

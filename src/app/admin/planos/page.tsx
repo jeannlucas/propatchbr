@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { 
   Package, 
@@ -34,13 +34,15 @@ export default function AdminPlanosPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
-  const fetchPlans = async () => {
+  const fetchPlans = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/admin/plans');
       const data = await res.json();
       if (data.plans) {
         setPlans(data.plans);
+      } else if (data.error) {
+        setMessage({ text: data.error, type: 'error' });
       }
     } catch (err) {
       console.error(err);
@@ -48,13 +50,39 @@ export default function AdminPlanosPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchPlans();
   }, []);
 
-  const handleFieldChange = (id: string, field: keyof PlanAdminItem, value: any) => {
+  useEffect(() => {
+    let isMounted = true;
+
+    fetch('/api/admin/plans')
+      .then((res) => res.json())
+      .then((data) => {
+        if (!isMounted) return;
+        if (data.plans) {
+          setPlans(data.plans);
+        } else if (data.error) {
+          setMessage({ text: data.error, type: 'error' });
+        }
+      })
+      .catch((err) => {
+        console.error(err);
+        if (isMounted) {
+          setMessage({ text: 'Falha ao carregar planos.', type: 'error' });
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleFieldChange = (id: string, field: keyof PlanAdminItem, value: string | number | boolean | null) => {
     setPlans((prev) =>
       prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
     );
@@ -154,7 +182,7 @@ export default function AdminPlanosPage() {
               >
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-border/60 pb-4">
                   <div>
-                    <span className="text-[11px] font-mono text-zinc-500 block">ID: {plan.id}</span>
+                    <span className="text-[11px] font-mono text-zinc-500 block break-all">ID: {plan.id}</span>
                     <h3 className="text-xl font-black text-foreground flex items-center gap-2">
                       {plan.name}
                       <span className="text-sm font-normal text-primary">({formatPrice(plan.price_cents)})</span>
