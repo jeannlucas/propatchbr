@@ -1,5 +1,3 @@
-import Link from 'next/link';
-
 export function Footer() {
   return (
     <footer className="border-t border-border bg-zinc-950/80 py-10 sm:py-12 text-center text-xs sm:text-sm text-zinc-500 px-4">
@@ -61,12 +59,7 @@ export function Footer() {
 
         {/* Copyright e Créditos */}
         <div className="space-y-1.5">
-          <p>
-            © 2026 ProPatch BR. Todos os direitos reservados. •{' '}
-            <Link href="/licenca" className="underline underline-offset-4 hover:text-primary transition-colors">
-              Licença MIT
-            </Link>
-          </p>
+          <p>© 2026 ProPatch BR. Todos os direitos reservados.</p>
           <p>
             Desenvolvido por{' '}
             <a
