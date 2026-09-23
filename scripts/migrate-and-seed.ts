@@ -53,7 +53,7 @@ async function run() {
 
   // Produto Principal
   const existingProduct = await db.query.products.findFirst({
-    where: eq(schema.products.slug, "bomba-patch-2026"),
+    where: eq(schema.products.slug, "pro-patch-2026"),
   });
 
   let productId = existingProduct?.id;
@@ -62,8 +62,8 @@ async function run() {
     const [createdProduct] = await db
       .insert(schema.products)
       .values({
-        name: "Bomba Patch 2026 PS2",
-        slug: "bomba-patch-2026",
+        name: "Pro Patch 2026",
+        slug: "pro-patch-2026",
         description:
           "O patch definitivo e 100% atualizado para PlayStation 2 e OPL. Elencos 2026, Brasileirão Séries A e B, Libertadores, Champions League e narração icônica.",
         imageUrl: "/capa-we10.png",

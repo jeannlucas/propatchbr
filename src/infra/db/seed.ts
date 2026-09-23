@@ -38,9 +38,9 @@ async function main() {
     console.log(`ℹ️ Usuário administrador já existe: ${adminEmail}`);
   }
 
-  // 2. Criar Produto Principal: Bomba Patch 2026
+  // 2. Criar Produto Principal: Pro Patch 2026
   const existingProduct = await db.query.products.findFirst({
-    where: eq(products.slug, "bomba-patch-2026"),
+    where: eq(products.slug, "pro-patch-2026"),
   });
 
   let productId = existingProduct?.id;
@@ -49,10 +49,10 @@ async function main() {
     const [createdProduct] = await db
       .insert(products)
       .values({
-        name: "Bomba Patch 2026 PS2",
-        slug: "bomba-patch-2026",
+        name: "Pro Patch 2026",
+        slug: "pro-patch-2026",
         description: "O patch definitivo e 100% atualizado para PlayStation 2 e OPL. Elencos 2026, Brasileirão Séries A e B, Libertadores, Champions League e narração icônica.",
-        imageUrl: "/img/bomba-patch-2026-cover.webp",
+        imageUrl: "/capa-we10.png",
         active: true,
       })
       .returning();
