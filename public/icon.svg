@@ -1,0 +1,56 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bgRadial" cx="50%" cy="35%" r="70%">
+      <stop offset="0%" stop-color="#064e3b" />
+      <stop offset="60%" stop-color="#06241b" />
+      <stop offset="100%" stop-color="#02120d" />
+    </radialGradient>
+    <linearGradient id="pGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4ade80" />
+      <stop offset="50%" stop-color="#22c55e" />
+      <stop offset="100%" stop-color="#15803d" />
+    </linearGradient>
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#22c55e" stop-opacity="0.9" />
+      <stop offset="50%" stop-color="#16a34a" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#14532d" stop-opacity="0.7" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#22c55e" flood-opacity="0.4" />
+    </filter>
+  </defs>
+
+  <!-- Fundo escuro com cantos arredondados padrão app/favicon -->
+  <rect width="512" height="512" rx="118" fill="url(#bgRadial)" />
+  <rect x="10" y="10" width="492" height="492" rx="110" fill="none" stroke="url(#borderGrad)" stroke-width="16" />
+
+  <!-- Símbolo Monograma "P" Ultra-Nítido e Esportivo -->
+  <g filter="url(#glow)">
+    <!-- P Principal: Itálico e Robusto -->
+    <path d="M 148 100 
+             L 320 100 
+             C 410 100, 445 150, 420 235 
+             C 395 320, 340 340, 260 340 
+             L 218 340 
+             L 190 412 
+             L 110 412 
+             Z 
+             M 238 180 
+             L 212 260 
+             L 268 260 
+             C 305 260, 332 250, 342 220 
+             C 350 195, 335 180, 298 180 
+             Z" 
+          fill="url(#pGrad)" />
+
+    <!-- Acento dinâmico / reflexo de luz superior -->
+    <path d="M 172 100 L 320 100 C 375 100, 410 125, 415 170 L 395 190 C 390 145, 360 130, 310 130 L 195 130 Z" fill="#ffffff" opacity="0.45" />
+    
+    <!-- Detalhe 'BR' esportivo discreto e elegante -->
+    <g transform="translate(285, 360)">
+      <rect width="125" height="48" rx="12" fill="#16a34a" opacity="0.9" />
+      <text x="62" y="33" font-family="system-ui, -apple-system, sans-serif" font-size="28" font-weight="900" font-style="italic" fill="#ffffff" text-anchor="middle" letter-spacing="2">BR</text>
+    </g>
+  </g>
+</svg>

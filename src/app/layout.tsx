@@ -25,6 +25,16 @@ export const metadata: Metadata = {
     locale: "pt_BR",
     images: [{ url: "/capa-we10.png", width: 800, height: 600, alt: "Pro Patch BR - Winning Eleven 10 PS2" }],
   },
+  icons: {
+    icon: [
+      { url: '/icon.png', sizes: '512x512', type: 'image/png' },
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+    shortcut: '/favicon.ico',
+    apple: [
+      { url: '/apple-touch-icon.png', sizes: '180x180', type: 'image/png' },
+    ],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
