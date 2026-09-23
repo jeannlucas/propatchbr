@@ -3,10 +3,17 @@ import { products, plans, productVersions } from "@/infra/db/schema";
 import { eq, desc, asc } from "drizzle-orm";
 import { Product, Plan } from "../types";
 
-export async function getProductWithPlans(productId?: string): Promise<Product | null> {
+export async function getProductWithPlans(slugOrId?: string): Promise<Product | null> {
   try {
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(slugOrId || '');
+    const whereClause = slugOrId
+      ? isUuid
+        ? eq(products.id, slugOrId)
+        : eq(products.slug, slugOrId)
+      : eq(products.active, true);
+
     const productRecord = await db.query.products.findFirst({
-      where: productId ? eq(products.id, productId) : eq(products.active, true),
+      where: whereClause,
       with: {
         versions: {
           orderBy: [desc(productVersions.createdAt)],
@@ -36,6 +43,7 @@ export async function getProductWithPlans(productId?: string): Promise<Product |
     return {
       id: productRecord.id,
       name: productRecord.name,
+      slug: productRecord.slug,
       description: productRecord.description,
       base_game: "Winning Eleven 10 (PS2)",
       is_active: productRecord.active,
@@ -76,6 +84,7 @@ export async function getAllProductsWithPlans(): Promise<Product[]> {
     return productRecords.map((prod) => ({
       id: prod.id,
       name: prod.name,
+      slug: prod.slug,
       description: prod.description,
       base_game: "Winning Eleven 10 (PS2)",
       is_active: prod.active,

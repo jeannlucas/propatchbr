@@ -25,6 +25,7 @@ export interface Plan {
 export interface Product {
   id: string;
   name: string;
+  slug?: string;
   description: string | null;
   base_game: string;
   is_active: boolean;

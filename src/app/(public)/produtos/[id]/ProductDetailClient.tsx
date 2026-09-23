@@ -196,10 +196,14 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
               </div>
 
               {/* Lista de Opções em Cards */}
-              <div className="space-y-3" role="radiogroup" aria-label="Escolha seu plano">
+              <div className="space-y-4 pt-2" role="radiogroup" aria-label="Escolha seu plano">
                 {plans.map((plan) => {
                   const isSelected = plan.id === selectedPlanId;
                   const isAvulsa = !plan.duration_days || plan.duration === 'lifetime';
+                  const badgeText = plan.badge || '';
+                  const isPopular = badgeText.toLowerCase().includes('popular');
+                  const isBestValue = badgeText.toLowerCase().includes('custo') || badgeText.toLowerCase().includes('benefício');
+                  const isLifetime = badgeText.toLowerCase().includes('eterno') || badgeText.toLowerCase().includes('vitalício');
 
                   return (
                     <div
@@ -214,34 +218,54 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
                           setSelectedPlanId(plan.id);
                         }
                       }}
-                      className={`relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border p-4 sm:p-5 cursor-pointer transition-all duration-200 select-none ${
+                      className={`group relative flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl p-4 sm:p-5 cursor-pointer transition-all duration-200 select-none ${
                         isSelected
-                          ? 'border-primary bg-green-950/20 shadow-lg shadow-green-950/40 ring-2 ring-primary/40'
-                          : 'border-border bg-card hover:border-zinc-700 hover:bg-zinc-900/60'
+                          ? 'border-2 border-emerald-500 bg-emerald-950/30 shadow-xl shadow-emerald-950/40 ring-1 ring-emerald-500/50'
+                          : 'border border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900/90'
                       }`}
                     >
-                      {/* Badge Superior */}
+                      {/* Badge Superior sem quebra */}
                       {plan.badge && (
-                        <span className={`absolute -top-2.5 right-4 rounded-full px-2.5 py-0.5 text-[11px] font-bold tracking-wide uppercase shadow ${
-                          isSelected
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-zinc-800 text-zinc-300 border border-zinc-700'
-                        }`}>
-                          {plan.badge}
-                        </span>
+                        <div className="absolute -top-3 right-4 sm:right-6 z-10 pointer-events-none">
+                          <span
+                            className={`inline-flex items-center px-3 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider shadow-md whitespace-nowrap border transition-all ${
+                              isSelected
+                                ? 'bg-emerald-500 text-zinc-950 border-emerald-400 shadow-emerald-500/30'
+                                : isBestValue
+                                ? 'bg-amber-400 text-zinc-950 border-amber-300 shadow-amber-400/20'
+                                : isLifetime
+                                ? 'bg-purple-500 text-white border-purple-400 shadow-purple-500/20'
+                                : isPopular
+                                ? 'bg-emerald-400 text-zinc-950 border-emerald-300'
+                                : 'bg-zinc-800 text-zinc-200 border-zinc-700'
+                            }`}
+                          >
+                            {plan.badge}
+                          </span>
+                        </div>
                       )}
 
                       {/* Lado Esquerdo: Radio + Detalhes do Plano */}
                       <div className="flex items-start gap-3.5">
-                        <div className={`mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-all ${
-                          isSelected ? 'border-primary bg-primary' : 'border-zinc-600 bg-transparent'
-                        }`}>
-                          {isSelected && <div className="h-2 w-2 rounded-full bg-black" />}
+                        <div
+                          className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-all ${
+                            isSelected
+                              ? 'border-emerald-400 bg-emerald-500 text-zinc-950 shadow-md shadow-emerald-500/40 ring-4 ring-emerald-500/20'
+                              : 'border-zinc-600 bg-zinc-900/80 group-hover:border-zinc-500'
+                          }`}
+                        >
+                          {isSelected ? (
+                            <Check className="h-3.5 w-3.5 stroke-[3.5] text-zinc-950" />
+                          ) : (
+                            <div className="h-2 w-2 rounded-full bg-transparent" />
+                          )}
                         </div>
 
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-base text-foreground">
+                            <h4 className={`text-base sm:text-lg font-black transition-colors ${
+                              isSelected ? 'text-white' : 'text-zinc-200'
+                            }`}>
                               {plan.name}
                             </h4>
                           </div>
@@ -255,11 +279,15 @@ export default function ProductDetailClient({ product }: ProductDetailClientProp
                       </div>
 
                       {/* Lado Direito: Preço */}
-                      <div className="sm:text-right shrink-0 pl-8 sm:pl-0">
-                        <div className="text-2xl font-black text-foreground">
+                      <div className="sm:text-right shrink-0 pl-9 sm:pl-0">
+                        <div className={`text-2xl sm:text-3xl font-black tracking-tight transition-colors ${
+                          isSelected ? 'text-emerald-400' : 'text-zinc-100'
+                        }`}>
                           {formatPrice(plan.price_cents)}
                         </div>
-                        <span className="text-[11px] text-zinc-400">
+                        <span className={`text-[11px] font-medium block mt-0.5 ${
+                          isSelected ? 'text-emerald-300/80' : 'text-zinc-400'
+                        }`}>
                           {isAvulsa ? 'Pagamento único' : `por ${plan.duration_days} dias`}
                         </span>
                       </div>

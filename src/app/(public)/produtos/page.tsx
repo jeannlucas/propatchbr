@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export default async function ProdutosIndexPage() {
   const product = await getProductWithPlans();
   if (product) {
-    redirect(`/produtos/${product.id}`);
+    redirect(`/produtos/${product.slug || product.id}`);
   }
   redirect('/');
 }

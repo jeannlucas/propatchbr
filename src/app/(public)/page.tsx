@@ -22,7 +22,7 @@ export default async function HomePage() {
     : 2490;
 
   const minPriceFormatted = formatPrice(minPriceCents);
-  const productUrl = product ? `/produtos/${product.id}` : '/produtos';
+  const productUrl = product ? `/produtos/${product.slug || product.id}` : '/produtos';
 
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-green-600 selection:text-white">
