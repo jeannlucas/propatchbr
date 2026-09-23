@@ -115,9 +115,6 @@ export default async function HomePage() {
                     className="relative rounded-xl shadow-2xl shadow-black/80 w-full transition duration-300 group-hover:scale-[1.02]"
                     style={{ background: 'transparent' }}
                   />
-                  <div className="absolute top-3 left-3 rounded-full bg-black/70 backdrop-blur px-3 py-1 text-xs font-bold text-green-400 border border-green-800/80">
-                    PS2 / OPL
-                  </div>
                 </div>
               </div>
 
