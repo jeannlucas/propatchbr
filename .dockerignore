@@ -1,7 +1,8 @@
 node_modules
 .next
 .git
-.env*.local
+.env*
+!.env.example
 storage/patches/*
 !storage/patches/.gitkeep
 npm-debug.log*

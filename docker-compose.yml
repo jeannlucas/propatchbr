@@ -5,10 +5,10 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-propatch_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-propatch_secret_2026}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
       POSTGRES_DB: ${POSTGRES_DB:-propatch_db}
     ports:
-      - "127.0.0.1:5434:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -29,11 +29,11 @@ services:
       propatch-postgres:
         condition: service_healthy
     ports:
-      - "127.0.0.1:3002:3000"
+      - "127.0.0.1:${APP_PORT:-3002}:3000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-propatch_user}:${POSTGRES_PASSWORD:-propatch_secret_2026}@propatch-postgres:5432/${POSTGRES_DB:-propatch_db}
-      AUTH_SECRET: ${AUTH_SECRET:-propatch_super_secret_session_key_min_32_characters_long_2026}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://propatchbr.bigdevz.com}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-propatch_user}:${POSTGRES_PASSWORD}@propatch-postgres:5432/${POSTGRES_DB:-propatch_db}
+      AUTH_SECRET: ${AUTH_SECRET:?Defina AUTH_SECRET no .env}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
       STORAGE_LOCAL_PATH: /app/storage/patches
       ABACATEPAY_API_KEY: ${ABACATEPAY_API_KEY}
       ABACATEPAY_WEBHOOK_SECRET: ${ABACATEPAY_WEBHOOK_SECRET}

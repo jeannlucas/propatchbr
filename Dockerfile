@@ -18,9 +18,9 @@ ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL \
     NEXT_TELEMETRY_DISABLED=1 \
     NODE_ENV=production
 
-# Dummy env vars para a compilação
-ENV DATABASE_URL="postgresql://propatch_user:propatch_secret_2026@propatch-postgres:5432/propatch_db" \
-    AUTH_SECRET="build_secret_key_minimum_32_characters_long_propatch_2026"
+# Dummy env vars para a compilação (Next.js static page collection)
+ENV DATABASE_URL="postgresql://build_dummy:build_dummy@127.0.0.1:5432/build_dummy" \
+    AUTH_SECRET="build_dummy_secret_key_min_32_chars_propatch_build"
 
 RUN npm run build
 
