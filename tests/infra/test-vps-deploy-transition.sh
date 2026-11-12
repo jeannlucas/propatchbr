@@ -27,16 +27,28 @@ touch "$EVENTS_LOG"
 cat << 'EOF' > "$MOCK_BIN/docker"
 #!/usr/bin/env bash
 echo "DOCKER: $*" >> "${TEST_EVENTS_LOG}"
+if [[ "$1" == compose && "$*" == *"ps --status running -q"* ]]; then
+  if [ "${MOCK_WRITER_RUNNING:-0}" = 1 ]; then echo writer; fi
+  exit 0
+fi
 if [[ "$*" =~ ps ]]; then
   echo "propatch_postgres"
   echo "propatch_app"
   exit 0
 fi
 if [[ "$*" =~ pg_dump ]]; then
+  if [ "${MOCK_DUMP_FAIL:-0}" = 1 ]; then
+    echo "partial dump"
+    exit 1
+  fi
   echo "MOCK_DUMP_DATA_FOR_RESTORE"
   exit 0
 fi
 if [[ "$*" =~ pg_restore ]]; then
+  if [[ "$*" == *"--list"* ]]; then
+    cat >/dev/null
+    exit 0
+  fi
   echo "RESTORE: pg_restore called with $*" >> "${TEST_EVENTS_LOG}"
   exit 0
 fi
@@ -188,16 +200,16 @@ if [ "$(cd "$REPO_DIR" && git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
   echo "❌ FALHOU (HEAD local diverge do commit esperado $EXPECTED_SHA)"
   exit 1
 fi
-if ! grep -q "DOCKER: compose -f docker-compose.yml up -d --build" "$EVENTS_LOG"; then
+if ! grep -q "DOCKER: compose -f docker-compose.yml up -d --build propatch-app" "$EVENTS_LOG"; then
   echo "❌ FALHOU (Comando docker compose up não foi emitido)"
   exit 1
 fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 3: Falha no deploy recupera versão anterior e restaura banco
+# Cenário 3: Falha pós-migração bloqueia novos deploys e preserva o snapshot
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 3: Falha no deploy recupera versão anterior e restaura banco .. "
+echo -n "🧪 Cenário 3: Falha pós-migração bloqueia novos deploys e preserva o snapshot .. "
 (
   cd "$INIT_REPO"
   git checkout -b dev-pr-falha >/dev/null 2>&1
@@ -208,6 +220,28 @@ echo -n "🧪 Cenário 3: Falha no deploy recupera versão anterior e restaura b
   git push origin main --tags >/dev/null 2>&1
 )
 
+> "$EVENTS_LOG"
+export MOCK_WRITER_RUNNING=1
+if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1; then
+  echo "Deploy prosseguiu com escritor ativo." >&2
+  exit 1
+fi
+unset MOCK_WRITER_RUNNING
+if grep -q 'pg_dump' "$EVENTS_LOG"; then
+  echo "Backup iniciado com escritor ativo." >&2
+  exit 1
+fi
+> "$EVENTS_LOG"
+export MOCK_DUMP_FAIL=1
+if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1; then
+  echo "Backup com erro e saída parcial foi aceito." >&2
+  exit 1
+fi
+unset MOCK_DUMP_FAIL
+if grep -Eq ' (build|run) |up -d --build' "$EVENTS_LOG"; then
+  echo "Deploy prosseguiu apesar da falha no backup." >&2
+  exit 1
+fi
 > "$EVENTS_LOG"
 export MOCK_CURL_FAIL=1
 set +e
@@ -229,12 +263,17 @@ if [ "$(cat "$VAR_LIB/implantado")" != "$EXPECTED_SHA" ]; then
   echo "❌ FALHOU (implantado não preservou o commit estável anterior)"
   exit 1
 fi
-if [ "$(cd "$REPO_DIR" && git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
-  echo "❌ FALHOU (HEAD local não retornou ao commit anterior $EXPECTED_SHA)"
+if [ ! -s "$VAR_LIB/recuperacao_pendente" ]; then
+  echo "❌ FALHOU (recuperação pendente não registrada)"
   exit 1
 fi
-if ! grep -q "RESTORE: pg_restore called with" "$EVENTS_LOG"; then
-  echo "❌ FALHOU (Restauração do banco via pg_restore não foi executada no rollback)"
+if grep -q "RESTORE: pg_restore called with" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (restauração destrutiva disparada automaticamente)"
+  exit 1
+fi
+> "$EVENTS_LOG"
+if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1 || [ -s "$EVENTS_LOG" ]; then
+  echo "❌ FALHOU (nova tentativa prosseguiu com recuperação pendente)"
   exit 1
 fi
 echo "✅ PASSOU"
