@@ -79,7 +79,7 @@ if [ -z "$DEPLOY_TAG" ]; then
 fi
 
 # 3. Validação Regex SemVer estrita
-SEMVER_REGEX='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+SEMVER_REGEX='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 if ! [[ "$DEPLOY_TAG" =~ $SEMVER_REGEX ]]; then
   echo "❌ ERRO DE GOVERNANÇA: A tag '$DEPLOY_TAG' não segue o padrão SemVer vMAJOR.MINOR.PATCH." >&2
   exit 1
@@ -87,7 +87,7 @@ fi
 
 # 4. Obtenção do commit alvo e validação de merge commit
 if [ -d "$TARGET_DIR/.git" ]; then
-  TARGET_SHA=$(git rev-parse -q --verify "refs/remotes/origin/tags/${DEPLOY_TAG}^{commit}" 2>/dev/null || git rev-parse -q --verify "${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
+  TARGET_SHA=$(git rev-parse -q --verify "refs/remotes/origin/tags/${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
   if [ -z "$TARGET_SHA" ]; then
     echo "❌ ERRO DE GOVERNANÇA: Tag '$DEPLOY_TAG' não encontrada no repositório." >&2
     exit 1
@@ -106,13 +106,19 @@ if [ -d "$TARGET_DIR/.git" ]; then
     exit 1
   fi
 else
-  TARGET_SHA="static-version"
+  echo "Checkout Git de produção indisponível." >&2
+  exit 1
 fi
 
 # 5. Verificação de Marcadores
 MARCADOR_TAG="$VAR_LIB_DIR/implantado_tag"
 MARCADOR_COMMIT="$VAR_LIB_DIR/implantado"
 mkdir -p "$VAR_LIB_DIR"
+RECOVERY_PENDING="$VAR_LIB_DIR/recuperacao_pendente"
+if [ -e "$RECOVERY_PENDING" ]; then
+  echo "Recuperação pendente em $RECOVERY_PENDING. Deploy bloqueado." >&2
+  exit 1
+fi
 
 IMPLANTADA_TAG=$(cat "$MARCADOR_TAG" 2>/dev/null || true)
 IMPLANTADO_COMMIT=$(cat "$MARCADOR_COMMIT" 2>/dev/null || true)
@@ -128,72 +134,70 @@ if [ -n "$IMPLANTADO_COMMIT" ] && [ "$IMPLANTADO_COMMIT" = "$TARGET_SHA" ] && [ 
   exit 0
 fi
 
-PREVIOUS_COMMIT=""
-if [ -d "$TARGET_DIR/.git" ]; then
-  PREVIOUS_COMMIT=$(git rev-parse HEAD 2>/dev/null || true)
+PREVIOUS_COMMIT="$IMPLANTADO_COMMIT"
+if [ -z "$PREVIOUS_COMMIT" ] || ! git cat-file -e "${PREVIOUS_COMMIT}^{commit}"; then
+  echo "Não foi possível comprovar o commit implantado. Deploy bloqueado." >&2
+  exit 1
 fi
 
-echo "=========================================================="
-echo "  Iniciando Deploy Canônico: $PROJECT_NAME ($DEPLOY_TAG)"
-echo "  Commit Alvo: $TARGET_SHA (Anterior: ${PREVIOUS_COMMIT:-nenhum})"
-echo "=========================================================="
+if [ ! -f "$COMPOSE_FILE" ] || ! command -v docker >/dev/null 2>&1; then
+  echo "Docker ou manifesto Compose de produção indisponível." >&2
+  exit 1
+fi
 
-# 6. Snapshot Preventivo do Banco de Dados
-TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+umask 077
 mkdir -p "$BACKUP_DIR"
-BACKUP_FILE="$BACKUP_DIR/pre_deploy_${TIMESTAMP}.dump"
+BACKUP_FILE=$(mktemp "$BACKUP_DIR/pre_deploy_XXXXXXXX")
 SHA_FILE="${BACKUP_FILE}.sha256"
-
-if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_PG}$"; then
-  echo "📦 Gerando dump pré-deploy do PostgreSQL ($DB_NAME)..."
-  docker exec -i "$CONTAINER_PG" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc --no-owner --no-acl > "$BACKUP_FILE" 2>/dev/null || true
-  if [ -s "$BACKUP_FILE" ]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum "$BACKUP_FILE" | awk '{print $1}' > "$SHA_FILE"
-    elif command -v shasum >/dev/null 2>&1; then
-      shasum -a 256 "$BACKUP_FILE" | awk '{print $1}' > "$SHA_FILE"
-    fi
-    echo "✅ Backup pré-deploy concluído: $BACKUP_FILE"
-  fi
-fi
-
-ROLLBACK_EXECUTED=0
 MIGRATIONS_RAN=0
+WRITERS_STOPPED=0
 
 perform_rollback() {
   local exit_code=$?
-  if [ $exit_code -ne 0 ] && [ "$ROLLBACK_EXECUTED" -eq 0 ]; then
-    ROLLBACK_EXECUTED=1
-    echo "" >&2
-    echo "🚨 ALERTA CRÍTICO: Falha no deploy de $PROJECT_NAME (código $exit_code)!" >&2
-    echo "↩️  Iniciando protocolo FAIL-CLOSED de Rollback..." >&2
-
-    # Restaura banco de dados se migrações foram executadas
-    if [ "$MIGRATIONS_RAN" -eq 1 ] && [ -f "$BACKUP_FILE" ] && [ -s "$BACKUP_FILE" ]; then
-      echo "   Restaurando banco de dados a partir do dump pré-deploy..." >&2
-      if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_PG}$"; then
-        docker exec -i "$CONTAINER_PG" psql -U "$DB_USER" -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" >/dev/null 2>&1 || true
-        cat "$BACKUP_FILE" | docker exec -i "$CONTAINER_PG" pg_restore -U "$DB_USER" -d "$DB_NAME" --clean --if-exists --no-owner --no-acl >/dev/null 2>&1 || true
-        echo "   ✅ Banco de dados restaurado com sucesso." >&2
-      fi
+  if [ "$exit_code" -eq 0 ]; then
+    return
+  fi
+  if [ "$MIGRATIONS_RAN" -eq 1 ]; then
+    if ! docker compose -f "$COMPOSE_FILE" stop propatch-app; then
+      echo "Falha ao parar os serviços após o erro de deploy." >&2
     fi
-
-    # Reverte código Git para commit anterior
-    if [ -n "$PREVIOUS_COMMIT" ] && [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
-      echo "   Revertendo repositório para commit anterior $PREVIOUS_COMMIT..." >&2
-      git reset --hard "$PREVIOUS_COMMIT" -q >/dev/null 2>&1 || true
-      if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
-        docker compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1 || true
-      fi
+    echo "O banco pode ter sido alterado. Snapshot preservado em $BACKUP_FILE." >&2
+    echo "Recuperação manual necessária. Novos deploys permanecem bloqueados." >&2
+    return
+  fi
+  if [ "$WRITERS_STOPPED" -eq 1 ]; then
+    if ! git reset --hard "$PREVIOUS_COMMIT" -q ||
+       ! docker compose -f "$COMPOSE_FILE" up -d propatch-app; then
+      echo "Falha ao retomar a versão anterior. Intervenção necessária." >&2
+    else
+      rm -f "$RECOVERY_PENDING"
     fi
-
-    if command -v notify-deploy >/dev/null 2>&1; then
-      notify-deploy error --project "$PROJECT_NAME" --msg "Deploy da tag $DEPLOY_TAG falhou. Rollback executado." || true
-    fi
-    exit 1
   fi
 }
 trap perform_rollback EXIT
+
+# Parar os escritores antes de criar o snapshot.
+WRITERS_STOPPED=1
+docker compose -f "$COMPOSE_FILE" stop propatch-app
+if ! running_writers=$(docker compose -f "$COMPOSE_FILE" ps --status running -q propatch-app) || [ -n "$running_writers" ]; then
+  echo "Não foi possível confirmar a parada dos escritores. Deploy bloqueado." >&2
+  exit 1
+fi
+
+if ! docker exec -i "$CONTAINER_PG" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc --no-owner --no-acl > "$BACKUP_FILE" ||
+   [ ! -s "$BACKUP_FILE" ]; then
+  echo "Backup pré-deploy falhou ou está vazio. Deploy bloqueado." >&2
+  exit 1
+fi
+docker exec -i "$CONTAINER_PG" pg_restore --list < "$BACKUP_FILE" >/dev/null
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256sum "$BACKUP_FILE" > "$SHA_FILE"
+else
+  shasum -a 256 "$BACKUP_FILE" > "$SHA_FILE"
+fi
+
+# Persistir o estado antes de iniciar qualquer etapa que possa alterar o banco.
+printf 'SHA=%s\nBACKUP=%s\nCHECKSUM=%s\n' "$PREVIOUS_COMMIT" "$BACKUP_FILE" "$SHA_FILE" > "$RECOVERY_PENDING"
 
 # 7. Atualização do Código para a Versão Alvo
 if [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
@@ -201,39 +205,37 @@ if [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
   git reset --hard "$TARGET_SHA" -q
 fi
 
-# 8. Recompilação e Inicialização dos Containers
-if command -v docker >/dev/null 2>&1 && [ -f "$COMPOSE_FILE" ]; then
-  echo "🚀 Recompilando containers da aplicação..."
-  docker compose -f "$COMPOSE_FILE" up -d --build
+# 8. Recompilação e inicialização
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "Manifesto de produção ausente no commit de destino." >&2
+  exit 1
+fi
+docker compose -f "$COMPOSE_FILE" build propatch-app
+MIGRATIONS_RAN=1
+docker compose -f "$COMPOSE_FILE" run --rm -T --no-deps propatch-app npm run db:migrate
+docker compose -f "$COMPOSE_FILE" up -d --build propatch-app
 
-  # 9. Execução de Migrações (Drizzle)
-  if docker ps --format '{{.Names}}' | grep -q "^${CONTAINER_APP}$"; then
-    echo "⚙️ Executando migrações do Drizzle..."
-    MIGRATIONS_RAN=1
-    docker exec -i "$CONTAINER_APP" npm run db:migrate || true
+# 10. Validação de Saúde (Healthcheck)
+echo "🩺 Executando healthcheck pós-deploy..."
+HEALTH_OK=0
+for i in $(seq 1 "$HEALTH_TIMEOUT"); do
+  STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_PORT}/" || true)
+  if [ "$STATUS_CODE" = "200" ]; then
+    HEALTH_OK=1
+    break
   fi
+  sleep 1
+done
 
-  # 10. Validação de Saúde (Healthcheck)
-  echo "🩺 Executando healthcheck pós-deploy..."
-  HEALTH_OK=0
-  for i in $(seq 1 "$HEALTH_TIMEOUT"); do
-    STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_PORT}/" || true)
-    if [ "$STATUS_CODE" = "200" ]; then
-      HEALTH_OK=1
-      break
-    fi
-    sleep 1
-  done
-
-  if [ "$HEALTH_OK" -ne 1 ]; then
-    echo "❌ Healthcheck falhou: app não respondeu 200 em ${HEALTH_TIMEOUT}s." >&2
-    exit 1
-  fi
+if [ "$HEALTH_OK" -ne 1 ]; then
+  echo "❌ Healthcheck falhou: app não respondeu 200 em ${HEALTH_TIMEOUT}s." >&2
+  exit 1
 fi
 
 # 11. Atualização dos Marcadores de Sucesso
 printf '%s\n' "$DEPLOY_TAG" > "$MARCADOR_TAG"
 printf '%s\n' "$TARGET_SHA" > "$MARCADOR_COMMIT"
+rm -f "$RECOVERY_PENDING"
 
 if command -v notify-deploy >/dev/null 2>&1; then
   notify-deploy success --project "$PROJECT_NAME" --msg "Produção promovida com sucesso para $DEPLOY_TAG ($TARGET_SHA)" || true

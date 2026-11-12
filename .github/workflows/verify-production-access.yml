@@ -1,0 +1,78 @@
+name: Verify Production Access (No Deploy)
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - task/verify-prod-access
+
+concurrency:
+  group: verify-prod-access
+  cancel-in-progress: false
+
+jobs:
+  verify-access:
+    name: Verificar Acesso de Produção via Wrapper
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Validar Presença de Segredos de Produção
+        shell: bash
+        run: |
+          missing=()
+          if [ -z "${{ secrets.TAILSCALE_AUTHKEY }}" ] && [ -z "${{ secrets.TS_OAUTH_SECRET }}" ]; then
+            missing+=("TAILSCALE_AUTHKEY ou TS_OAUTH_SECRET (e TS_OAUTH_CLIENT_ID)")
+          fi
+          if [ -z "${{ secrets.VPS_SSH_KEY }}" ]; then
+            missing+=("VPS_SSH_KEY")
+          fi
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Credenciais ausentes nos Secrets do ambiente production: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Conectar à Tailscale (Rede Privada)
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-deploy
+
+      - name: Executar Probe check-access na VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_HOST="${VPS_HOST:-100.90.8.15}"
+          VPS_SSH_USER="${VPS_SSH_USER:-jeann}"
+          VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/prod_deploy_key
+          chmod 600 ~/.ssh/prod_deploy_key
+
+          # Verificação estrita do host key da VPS bigdevz contra MITM
+          echo "100.90.8.15 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOttXCeXd5LtLDJ6XRhW948AIus1NvbuUJyeYAD7KMW4" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          echo "Disparando probe 'check-access' para testar wrapper sem acionar deploy..."
+          set +e
+          OUTPUT=$(ssh -i ~/.ssh/prod_deploy_key -o StrictHostKeyChecking=yes -p "$VPS_SSH_PORT" "$VPS_SSH_USER@$VPS_HOST" "check-access" 2>&1)
+          EXIT_CODE=$?
+          set -e
+
+          echo "Resposta recebida do host:"
+          echo "$OUTPUT"
+
+          # O wrapper deve rejeitar especificamente 'check-access' com mensagem de segurança SemVer
+          if echo "$OUTPUT" | grep -q "Apenas uma única tag no formato vMAJOR.MINOR.PATCH"; then
+            echo "✅ SUCESSO: Conexão autenticada e wrapper de produção respondeu rejeitando o probe com segurança (zero deploy)."
+          else
+            echo "::error::A resposta do host não correspondeu à rejeição esperada do wrapper protegido!"
+            exit 1
+          fi
