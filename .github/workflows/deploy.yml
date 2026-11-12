@@ -1,0 +1,174 @@
+name: Production Deploy (VPS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy-to-vps:
+    name: Validar SemVer e Promover Produção (VPS)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout com Histórico Completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validar Tag SemVer e Promoção Aprovada por PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${GITHUB_REF_NAME}"
+          echo "=========================================================="
+          echo "Validando tag de release para deploy em produção: $TAG_NAME"
+          echo "=========================================================="
+
+          SEMVER_REGEX='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if ! [[ "$TAG_NAME" =~ $SEMVER_REGEX ]]; then
+            echo "❌ ERRO DE GOVERNANÇA: A tag '$TAG_NAME' não segue o padrão SemVer vMAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          echo "✅ Formato SemVer válido: $TAG_NAME"
+
+          TARGET_SHA=$(git rev-parse -q --verify "refs/tags/${TAG_NAME}^{commit}")
+          echo "SHA alvo da tag: $TARGET_SHA"
+
+          if ! git merge-base --is-ancestor "$TARGET_SHA" origin/main; then
+            echo "❌ ERRO DE GOVERNANÇA: O commit $TARGET_SHA apontado pela tag não pertence à branch main!" >&2
+            exit 1
+          fi
+          echo "✅ Commit pertence à branch main."
+
+          PARENT_COUNT=$(git rev-list --parents -n 1 "$TARGET_SHA" | awk '{print NF-1}')
+          if [ "$PARENT_COUNT" -lt 2 ]; then
+            echo "❌ ERRO DE GOVERNANÇA: O commit $TARGET_SHA apontado pela tag possui apenas $PARENT_COUNT pai e NÃO é um merge commit!" >&2
+            echo "   De acordo com a Seção 1 do AGENTS.md, todo deploy em produção deve ser precedido de PR de dev para main aprovado com 'Create a merge commit'." >&2
+            exit 1
+          fi
+          echo "✅ Proveniência confirmada: merge commit com $PARENT_COUNT pais."
+
+          echo "Verificando se o commit foi gerado por um Pull Request aprovado e mergeado na branch main..."
+          PR_NUM=""
+          PR_LIST=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${TARGET_SHA}/pulls" --jq '.[] | select(.base.ref == "main" and .merged_at != null)' 2>/dev/null || true)
+          if [ -n "$PR_LIST" ]; then
+            PR_NUM=$(echo "$PR_LIST" | jq -r '.number' | head -n 1 || true)
+          else
+            COMMIT_MSG=$(git log -1 --pretty=%B "$TARGET_SHA")
+            if [[ "$COMMIT_MSG" =~ Merge\ pull\ request\ #([0-9]+) ]]; then
+              PR_NUM="${BASH_REMATCH[1]}"
+            fi
+          fi
+
+          if [ -z "$PR_NUM" ]; then
+            echo "❌ ERRO DE GOVERNANÇA: O commit $TARGET_SHA apontado pela tag não foi gerado por um Pull Request na branch main!" >&2
+            exit 1
+          fi
+
+          echo "Verificando evidência própria de aprovação humana por Jeann Lucas no Pull Request #$PR_NUM..."
+          PR_DATA=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}" --jq '{merged: .merged, merged_by: .merged_by.login, base: .base.ref, head: .head.ref, head_sha: .head.sha, merge_commit_sha: .merge_commit_sha}' 2>/dev/null || true)
+          MERGED_BY=$(echo "$PR_DATA" | jq -r '.merged_by // empty')
+          BASE_REF=$(echo "$PR_DATA" | jq -r '.base // empty')
+          HEAD_REF=$(echo "$PR_DATA" | jq -r '.head // empty')
+          PR_HEAD_SHA=$(echo "$PR_DATA" | jq -r '.head_sha // empty')
+          PR_MERGE_SHA=$(echo "$PR_DATA" | jq -r '.merge_commit_sha // empty')
+
+          if [ "$BASE_REF" != "main" ]; then
+            echo "❌ ERRO DE GOVERNANÇA: O PR #$PR_NUM foi mergeado na branch '$BASE_REF', não na branch 'main'!" >&2
+            exit 1
+          fi
+
+          APPROVED_FOR_HEAD=0
+          if [ -n "$PR_HEAD_SHA" ]; then
+            APPROVED_FOR_HEAD=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUM}/reviews" --jq "[.[] | select(.user.login == \"jeannlucas\" and .state == \"APPROVED\" and .commit_id == \"${PR_HEAD_SHA}\")] | length" 2>/dev/null || echo 0)
+          fi
+
+          if [ "$APPROVED_FOR_HEAD" -gt 0 ]; then
+            echo "✅ Promoção aprovada comprovada com evidência própria: PR #$PR_NUM ($HEAD_REF -> $BASE_REF), autorizada por Jeann Lucas (aprovações no head $PR_HEAD_SHA: $APPROVED_FOR_HEAD)."
+          else
+            echo "❌ ERRO DE GOVERNANÇA: O PR #$PR_NUM não possui aprovação formal válida de Jeann Lucas para a revisão de código promovida ($PR_HEAD_SHA)!" >&2
+            exit 1
+          fi
+
+          {
+            echo "## 🏷️ Validação de Tag SemVer e Governança"
+            echo "| Parâmetro | Valor |"
+            echo "|---|---|"
+            echo "| **Tag de Release** | \`$TAG_NAME\` |"
+            echo "| **Commit Alvo** | \`$TARGET_SHA\` |"
+            echo "| **Branch Base** | \`main\` |"
+            echo "| **Pull Request** | #$PR_NUM (\`$HEAD_REF\` → \`$BASE_REF\`) |"
+            echo "| **Autorização Humana** | Válida por \`jeannlucas\` (merged_by: \`$MERGED_BY\`, reviews: $APPROVED_FOR_HEAD) |"
+            echo "| **Status da Governança** | ✅ 100% Conforme AGENTS.md |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verificar Configuração de Conectividade
+        id: check_config
+        env:
+          TAILSCALE_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if { [ -n "$TAILSCALE_KEY" ] || [ -n "$TS_OAUTH_SECRET" ]; } && [ -n "$SSH_KEY" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Registrar Status de Deploy Pendente
+        if: steps.check_config.outputs.has_secrets != 'true'
+        shell: bash
+        run: |
+          echo "::warning::Deploy em produção pendente de configuração de secrets SSH/Tailscale."
+          {
+            echo "## ⏸️ Status: Tag Validada — Deploy Remoto Pendente"
+            echo "> **Aviso:** A tag \`${GITHUB_REF_NAME}\` passou com 100% de sucesso por todas as validações de governança e proveniência."
+            echo "> O disparo automático via SSH para a VPS **NÃO foi executado** nesta rodada porque os secrets de conectividade privada (\`TAILSCALE_AUTHKEY\` ou \`TS_OAUTH_SECRET\`) e SSH (\`VPS_SSH_KEY\`) ainda não foram configurados no repositório."
+            echo ""
+            echo "### Próximos Passos para Execução"
+            echo "1. **Para Deploy Automatizado:** Configurar os secrets \`TAILSCALE_AUTHKEY\` e \`VPS_SSH_KEY\` no GitHub Actions."
+            echo "2. **Para Execução Manual Autorizada na VPS:**"
+            echo "   \`\`\`bash"
+            echo "   ssh bigdevz \"cd /srv/propatchbr && ./scripts/vps-deploy.sh --tag ${GITHUB_REF_NAME}\""
+            echo "   \`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conectar à Tailscale (Rede Privada)
+        if: steps.check_config.outputs.has_secrets == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-deploy
+
+      - name: Executar Deploy na VPS via SSH
+        if: steps.check_config.outputs.has_secrets == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_HOST="${VPS_HOST:-100.90.8.15}"
+          VPS_SSH_USER="${VPS_SSH_USER:-deployer}"
+          VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "100.90.8.15 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOttXCeXd5LtLDJ6XRhW948AIus1NvbuUJyeYAD7KMW4" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -p "$VPS_SSH_PORT" "$VPS_SSH_USER@$VPS_HOST" \
+            "/srv/propatchbr/scripts/vps-deploy.sh --tag $TAG_NAME"
