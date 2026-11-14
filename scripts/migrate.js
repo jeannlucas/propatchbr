@@ -173,6 +173,73 @@ const EXPECTED_SCHEMA = {
   },
 };
 
+const EXPECTED_CONSTRAINTS = {
+  download_logs_pkey: 'PRIMARY KEY (id)',
+  download_logs_product_version_id_product_versions_id_fk:
+    'FOREIGN KEY (product_version_id) REFERENCES product_versions(id) ON DELETE CASCADE',
+  download_logs_user_id_users_id_fk:
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+  licenses_license_key_unique: 'UNIQUE (license_key)',
+  licenses_pkey: 'PRIMARY KEY (id)',
+  licenses_plan_id_plans_id_fk:
+    'FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL',
+  licenses_product_id_products_id_fk:
+    'FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE',
+  licenses_user_id_users_id_fk:
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+  password_reset_tokens_pkey: 'PRIMARY KEY (id)',
+  password_reset_tokens_user_id_users_id_fk:
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+  payments_billing_id_unique: 'UNIQUE (billing_id)',
+  payments_pkey: 'PRIMARY KEY (id)',
+  payments_plan_id_plans_id_fk:
+    'FOREIGN KEY (plan_id) REFERENCES plans(id) ON DELETE SET NULL',
+  payments_user_id_users_id_fk:
+    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+  plans_pkey: 'PRIMARY KEY (id)',
+  plans_product_id_products_id_fk:
+    'FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE',
+  product_versions_pkey: 'PRIMARY KEY (id)',
+  product_versions_product_id_products_id_fk:
+    'FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE',
+  products_pkey: 'PRIMARY KEY (id)',
+  products_slug_unique: 'UNIQUE (slug)',
+  profiles_id_users_id_fk:
+    'FOREIGN KEY (id) REFERENCES users(id) ON DELETE CASCADE',
+  profiles_pkey: 'PRIMARY KEY (id)',
+  users_email_unique: 'UNIQUE (email)',
+  users_pkey: 'PRIMARY KEY (id)',
+};
+
+const EXPECTED_INDEXES = {
+  download_logs_pkey:
+    'CREATE UNIQUE INDEX download_logs_pkey ON public.download_logs USING btree (id)',
+  licenses_license_key_unique:
+    'CREATE UNIQUE INDEX licenses_license_key_unique ON public.licenses USING btree (license_key)',
+  licenses_pkey:
+    'CREATE UNIQUE INDEX licenses_pkey ON public.licenses USING btree (id)',
+  password_reset_tokens_pkey:
+    'CREATE UNIQUE INDEX password_reset_tokens_pkey ON public.password_reset_tokens USING btree (id)',
+  payments_billing_id_unique:
+    'CREATE UNIQUE INDEX payments_billing_id_unique ON public.payments USING btree (billing_id)',
+  payments_pkey:
+    'CREATE UNIQUE INDEX payments_pkey ON public.payments USING btree (id)',
+  plans_pkey:
+    'CREATE UNIQUE INDEX plans_pkey ON public.plans USING btree (id)',
+  product_versions_pkey:
+    'CREATE UNIQUE INDEX product_versions_pkey ON public.product_versions USING btree (id)',
+  products_pkey:
+    'CREATE UNIQUE INDEX products_pkey ON public.products USING btree (id)',
+  products_slug_unique:
+    'CREATE UNIQUE INDEX products_slug_unique ON public.products USING btree (slug)',
+  profiles_pkey:
+    'CREATE UNIQUE INDEX profiles_pkey ON public.profiles USING btree (id)',
+  users_email_unique:
+    'CREATE UNIQUE INDEX users_email_unique ON public.users USING btree (email)',
+  users_pkey:
+    'CREATE UNIQUE INDEX users_pkey ON public.users USING btree (id)',
+};
+
 async function verifyStrictEquivalence(tx) {
   const publicTables = await tx`
     SELECT table_name FROM information_schema.tables 
@@ -221,26 +288,78 @@ async function verifyStrictEquivalence(tx) {
     }
   }
 
-  // 3. Validar constraints (PKs, Uniques, FKs)
+  // 3. Validar constraints e suas definições exatas
   const dbConstraints = await tx`
-    SELECT conname, contype, conrelid::regclass::text as table_name 
-    FROM pg_constraint 
-    JOIN pg_namespace n ON n.oid = connamespace 
+    SELECT 
+      c.conname, 
+      c.contype, 
+      c.conrelid::regclass::text as table_name,
+      pg_get_constraintdef(c.oid) as def
+    FROM pg_constraint c 
+    JOIN pg_namespace n ON n.oid = c.connamespace 
     WHERE n.nspname = 'public' 
-    ORDER BY conname;
+    ORDER BY c.conname;
   `;
-  const dbConNames = new Set(dbConstraints.map((c) => c.conname));
+  const dbConMap = new Map();
+  for (const c of dbConstraints) {
+    dbConMap.set(c.conname, c.def);
+  }
 
-  const allExpectedConstraints = Object.values(EXPECTED_SCHEMA).flatMap(
-    (t) => t.constraints
-  );
-  for (const conName of allExpectedConstraints) {
-    if (!dbConNames.has(conName)) {
+  const normalizeDef = (s) => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+  for (const [conName, expectedDef] of Object.entries(EXPECTED_CONSTRAINTS)) {
+    if (!dbConMap.has(conName)) {
       throw new Error(`Constraint obrigatória ausente no banco: ${conName}`);
+    }
+    const actualDef = dbConMap.get(conName);
+    if (normalizeDef(actualDef) !== normalizeDef(expectedDef)) {
+      throw new Error(
+        `Definição divergente na constraint ${conName}: esperado "${expectedDef}", encontrado "${actualDef}"`
+      );
     }
   }
 
-  console.log('✅ Equivalência estrutural estrita comprovada: 9 tabelas, tipos, nulabilidade e 24 constraints conferidos.');
+  const expectedConNames = new Set(Object.keys(EXPECTED_CONSTRAINTS));
+  const extraConstraints = dbConstraints
+    .map((c) => c.conname)
+    .filter((name) => !expectedConNames.has(name));
+  if (extraConstraints.length > 0) {
+    throw new Error(`Constraints extras inesperadas no banco: [${extraConstraints.join(', ')}]`);
+  }
+
+  // 4. Validar índices e suas definições exatas
+  const dbIndexes = await tx`
+    SELECT tablename, indexname, indexdef 
+    FROM pg_indexes 
+    WHERE schemaname = 'public' 
+    ORDER BY indexname;
+  `;
+  const dbIdxMap = new Map();
+  for (const idx of dbIndexes) {
+    dbIdxMap.set(idx.indexname, idx.indexdef);
+  }
+
+  for (const [idxName, expectedDef] of Object.entries(EXPECTED_INDEXES)) {
+    if (!dbIdxMap.has(idxName)) {
+      throw new Error(`Índice obrigatório ausente no banco: ${idxName}`);
+    }
+    const actualDef = dbIdxMap.get(idxName);
+    if (normalizeDef(actualDef) !== normalizeDef(expectedDef)) {
+      throw new Error(
+        `Definição divergente no índice ${idxName}: esperado "${expectedDef}", encontrado "${actualDef}"`
+      );
+    }
+  }
+
+  const expectedIdxNames = new Set(Object.keys(EXPECTED_INDEXES));
+  const extraIndexes = dbIndexes
+    .map((i) => i.indexname)
+    .filter((name) => !expectedIdxNames.has(name));
+  if (extraIndexes.length > 0) {
+    throw new Error(`Índices extras inesperados no banco: [${extraIndexes.join(', ')}]`);
+  }
+
+  console.log('✅ Equivalência estrutural estrita comprovada: 9 tabelas, tipos, nulabilidade, 24 constraints e 13 índices conferidos.');
 }
 
 async function runMigrations() {

@@ -170,6 +170,12 @@ if [ -z "$PREVIOUS_COMMIT" ]; then
   PREVIOUS_COMMIT="legacy"
 fi
 
+# Autorização explícita de baseline estritamente limitada à primeira transição legada aprovada
+if [ "$PREVIOUS_COMMIT" = "legacy" ] || [ -f "$VAR_LIB_DIR/allow_legacy_baseline" ]; then
+  ALLOW_BASELINE=1
+  echo "🔒 Transição a partir da instalação legada confirmada ($PREVIOUS_COMMIT). Autorização explícita de baseline habilitada para esta release inicial."
+fi
+
 # Validação do commit anterior (aceita 'legacy' para a primeira transição)
 if [ "$PREVIOUS_COMMIT" != "legacy" ] && [ -d "$TARGET_DIR/.git" ]; then
   if ! git cat-file -e "${PREVIOUS_COMMIT}^{commit}" 2>/dev/null; then
@@ -342,7 +348,7 @@ fi
 # 13. Atualização dos Marcadores de Sucesso
 printf '%s\n' "$DEPLOY_TAG" > "$MARCADOR_TAG"
 printf '%s\n' "$TARGET_SHA" > "$MARCADOR_COMMIT"
-rm -f "$RECOVERY_PENDING"
+rm -f "$RECOVERY_PENDING" "$VAR_LIB_DIR/allow_legacy_baseline"
 
 if command -v notify-deploy >/dev/null 2>&1; then
   notify-deploy success --project "$PROJECT_NAME" --msg "Produção promovida com sucesso para $DEPLOY_TAG ($TARGET_SHA)" || true

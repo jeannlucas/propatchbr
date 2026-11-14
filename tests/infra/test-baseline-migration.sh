@@ -112,12 +112,12 @@ fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 3: Base com Constraint Divergente em Modo Explícito -> Deve Abortar
+# Cenário 3A: Base com Constraint Ausente em Modo Explícito -> Deve Abortar
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 3: Base com constraint ausente aborta em modo explícito .. "
+echo -n "🧪 Cenário 3A: Base com constraint ausente aborta em modo explícito .. "
 docker exec "$CONTAINER_NAME" createdb -h 127.0.0.1 -U propatch_user db_divergent_con
 docker exec -i "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con < drizzle/0000_lame_onslaught.sql >/dev/null 2>&1
-# Remover uma constraint propositalmente
+# Remover uma constraint propositalmente mantendo todas as 9 tabelas
 docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con -c "ALTER TABLE download_logs DROP CONSTRAINT download_logs_user_id_users_id_fk;" >/dev/null 2>&1
 
 set +e
@@ -138,6 +138,73 @@ fi
 HAS_DRIZZLE_CON=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='drizzle';")
 if [ "$HAS_DRIZZLE_CON" -ne 0 ]; then
   echo "❌ FALHOU: gravou histórico em banco divergente de constraints"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 3B: Base com 9 Tabelas mas Definição de Constraint Divergente -> Deve Abortar
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 3B: Base com 9 tabelas e definição de constraint divergente aborta .. "
+docker exec "$CONTAINER_NAME" createdb -h 127.0.0.1 -U propatch_user db_divergent_con_def
+docker exec -i "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con_def < drizzle/0000_lame_onslaught.sql >/dev/null 2>&1
+# Alterar definição da constraint para ON DELETE RESTRICT (mantendo as 9 tabelas intactas)
+docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con_def -c "
+  ALTER TABLE download_logs DROP CONSTRAINT download_logs_user_id_users_id_fk;
+  ALTER TABLE download_logs ADD CONSTRAINT download_logs_user_id_users_id_fk FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT;
+" >/dev/null 2>&1
+
+set +e
+CON_DEF_OUT=$(DATABASE_URL="${BASE_URL}/db_divergent_con_def" node scripts/migrate.js --allow-baseline 2>&1)
+CON_DEF_EXIT=$?
+set -e
+
+if [ "$CON_DEF_EXIT" -eq 0 ]; then
+  echo "❌ FALHOU: deveria ter abortado por definição divergente de constraint"
+  exit 1
+fi
+
+if ! echo "$CON_DEF_OUT" | grep -q "Definição divergente na constraint"; then
+  echo "❌ FALHOU: mensagem de definição divergente de constraint não encontrada"
+  exit 1
+fi
+
+HAS_DRIZZLE_CON_DEF=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_con_def -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='drizzle';")
+if [ "$HAS_DRIZZLE_CON_DEF" -ne 0 ]; then
+  echo "❌ FALHOU: histórico foi gravado em banco com definição de constraint divergente"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 3C: Base com 9 Tabelas mas Divergência na Estrutura de Índices -> Deve Abortar
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 3C: Base com 9 tabelas e divergência de índice aborta .. "
+docker exec "$CONTAINER_NAME" createdb -h 127.0.0.1 -U propatch_user db_divergent_idx_def
+docker exec -i "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_idx_def < drizzle/0000_lame_onslaught.sql >/dev/null 2>&1
+# Criar índice extra não homologado mantendo as 9 tabelas e 24 constraints intactas
+docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_idx_def -c "
+  CREATE INDEX products_name_idx ON products (name);
+" >/dev/null 2>&1
+
+set +e
+IDX_DEF_OUT=$(DATABASE_URL="${BASE_URL}/db_divergent_idx_def" node scripts/migrate.js --allow-baseline 2>&1)
+IDX_DEF_EXIT=$?
+set -e
+
+if [ "$IDX_DEF_EXIT" -eq 0 ]; then
+  echo "❌ FALHOU: deveria ter abortado por divergência de índice"
+  exit 1
+fi
+
+if ! echo "$IDX_DEF_OUT" | grep -q -E "Índices extras inesperados|Definição divergente no índice"; then
+  echo "❌ FALHOU: mensagem de divergência de índice não encontrada"
+  exit 1
+fi
+
+HAS_DRIZZLE_IDX_DEF=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_divergent_idx_def -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='drizzle';")
+if [ "$HAS_DRIZZLE_IDX_DEF" -ne 0 ]; then
+  echo "❌ FALHOU: histórico foi gravado em banco com definição de índice divergente"
   exit 1
 fi
 echo "✅ PASSOU"
@@ -211,6 +278,6 @@ fi
 echo "✅ PASSOU"
 
 echo "=========================================================="
-echo "🎉 Todos os 6 cenários de baseline e migração passaram 100%!"
+echo "🎉 Todos os 8 cenários de baseline e migração passaram 100%!"
 echo "=========================================================="
 exit 0

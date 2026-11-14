@@ -177,6 +177,12 @@ sed \
   "$REPO_DIR/scripts/vps-deploy.sh" > "$SANDBOX_SCRIPT"
 chmod +x "$SANDBOX_SCRIPT"
 
+WRAPPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts" && pwd)/vps-deploy-wrapper.sh"
+WRAPPER_SCRIPT="$TEST_DIR/propatch-deploy"
+sed -e "s|readonly DEPLOY_SCRIPT=\"/srv/propatchbr/scripts/vps-deploy.sh\"|readonly DEPLOY_SCRIPT=\"$SANDBOX_SCRIPT\"|g" \
+  "$WRAPPER_SRC" > "$WRAPPER_SCRIPT"
+chmod +x "$WRAPPER_SCRIPT"
+
 echo "=========================================================="
 echo "  ProPatch BR — Teste de Transição e Gatilho SemVer       "
 echo "=========================================================="
@@ -263,12 +269,37 @@ fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 5: Transição válida de 'legacy' para v1.0.1
+# Cenário 5: Transição válida de 'legacy' para v1.0.1 via Wrapper SSH
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 5: Transição válida de legacy para v1.0.1 .. "
+echo -n "🧪 Cenário 5: Transição válida de legacy para v1.0.1 via Wrapper SSH .. "
+
+# 5.1 Validar rejeição fail-closed de entradas inválidas no wrapper antes de tocar no deploy
+> "$EVENTS_LOG"
+set +e
+SSH_ORIGINAL_COMMAND="" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
+EMPTY_EXIT=$?
+SSH_ORIGINAL_COMMAND="v1.0.1; rm -rf /" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
+INJ_EXIT=$?
+SSH_ORIGINAL_COMMAND="--allow-baseline" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
+FLAG_EXIT=$?
+SSH_ORIGINAL_COMMAND=$'v1.0.1\nid' bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
+NL_EXIT=$?
+set -e
+
+if [ "$EMPTY_EXIT" -eq 0 ] || [ "$INJ_EXIT" -eq 0 ] || [ "$FLAG_EXIT" -eq 0 ] || [ "$NL_EXIT" -eq 0 ]; then
+  echo "❌ FALHOU: wrapper permitiu execução com entrada maliciosa/inválida"
+  exit 1
+fi
+
+if [ -s "$EVENTS_LOG" ]; then
+  echo "❌ FALHOU: wrapper disparou deploy mesmo com entradas inválidas"
+  exit 1
+fi
+
+# 5.2 Execução canônica da release via Wrapper recebendo estritamente 'v1.0.1'
 EXPECTED_SHA=$(cd "$INIT_REPO" && git rev-parse HEAD)
 > "$EVENTS_LOG"
-bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1
+SSH_ORIGINAL_COMMAND="v1.0.1" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
 
 if [ "$(cat "$VAR_LIB/implantado_tag")" != "v1.0.1" ]; then
   echo "❌ FALHOU (implantado_tag não foi atualizado para v1.0.1)"
@@ -282,14 +313,20 @@ if [ "$(cd "$REPO_DIR" && git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
   echo "❌ FALHOU (HEAD local diverge do commit esperado $EXPECTED_SHA)"
   exit 1
 fi
+
+# Confirmar que a autorização de baseline chegou ao migrador na primeira transição
+if ! grep -q "node scripts/migrate.js --allow-baseline" "$EVENTS_LOG"; then
+  echo "❌ FALHOU: autorização de baseline não chegou ao migrador na primeira transição legada"
+  exit 1
+fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 6: Segunda execução da mesma tag é ignorada de forma idempotente
+# Cenário 6: Segunda execução da mesma tag é ignorada de forma idempotente via Wrapper
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 6: Idempotência na reexecução da mesma tag .. "
+echo -n "🧪 Cenário 6: Idempotência na reexecução da mesma tag via Wrapper .. "
 > "$EVENTS_LOG"
-bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1
+SSH_ORIGINAL_COMMAND="v1.0.1" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
 if grep -q "Parando escritores" "$EVENTS_LOG"; then
   echo "❌ FALHOU (Executou parada desnecessária em tag já implantada)"
   exit 1
@@ -313,13 +350,23 @@ echo -n "🧪 Cenário 7: Falha pós-migração bloqueia novos deploys e preserv
 > "$EVENTS_LOG"
 export MOCK_CURL_FAIL=1
 set +e
-bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1
+SSH_ORIGINAL_COMMAND="v1.0.2" bash "$WRAPPER_SCRIPT" >/dev/null 2>&1
 DEPLOY_EXIT=$?
 set -e
 export MOCK_CURL_FAIL=0
 
 if [ "$DEPLOY_EXIT" -eq 0 ]; then
   echo "❌ FALHOU (Deploy deveria ter falhado)"
+  exit 1
+fi
+
+# Confirmar que em v1.0.2 a flag --allow-baseline NÃO foi repassada
+if grep -q "node scripts/migrate.js --allow-baseline" "$EVENTS_LOG"; then
+  echo "❌ FALHOU: baseline foi indevidamente habilitado em release posterior à inicial"
+  exit 1
+fi
+if ! grep -q "node scripts/migrate.js" "$EVENTS_LOG"; then
+  echo "❌ FALHOU: migrador normal não foi executado para v1.0.2"
   exit 1
 fi
 
