@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run typecheck && npm run build",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "node scripts/migrate.js",
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/infra/db/seed.ts",
     "db:setup": "tsx scripts/migrate-and-seed.ts"

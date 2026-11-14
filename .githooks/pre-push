@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Barreira Pré-Push Universal, Determinística e Fail-Closed
+# Aplica-se a main repo, worktrees e checkouts secundários.
+set -euo pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "$REPO_ROOT"
+
+refs_do_push="$(cat || true)"
+[ -n "$refs_do_push" ] || exit 0
+
+tem_codigo=0
+CURRENT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+IS_DIRTY=0
+if ! git diff-index --quiet HEAD -- 2>/dev/null; then
+    IS_DIRTY=1
+fi
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "${remote_ref:-}" ] || continue
+    case "${local_sha:-}" in
+        *[!0]*) ;;
+        *) continue ;; # deleção de ref remota (não leva commit novo)
+    esac
+    tem_codigo=1
+
+    echo "================================================="
+    echo "🛡️  [gate] BARREIRA PRÉ-PUSH DETERMINÍSTICA ATIVA"
+    echo "    Referência: $local_ref ($local_sha)"
+    echo "    Destino:    $remote_ref"
+    echo "================================================="
+
+    if [ "$local_sha" = "$CURRENT_SHA" ] && [ "$IS_DIRTY" -eq 0 ]; then
+        echo "[gate] Validando diretamente na árvore de trabalho limpa (HEAD = $local_sha)..."
+        if ! ./scripts/check.sh; then
+            echo "" >&2
+            echo "❌ [gate] PUSH BARRADO: Falha no Quality Gate local (scripts/check.sh)." >&2
+            echo "   O commit $local_sha contém erros. Corrija-os antes de publicar." >&2
+            exit 1
+        fi
+    else
+        echo "[gate] Árvore atual diverge do commit alvo ($local_sha) ou possui alterações pendentes."
+        echo "[gate] Isolando commit exato $local_sha em worktree efêmero para teste determinístico..."
+        
+        TMP_WORKTREE="$(mktemp -d "/tmp/gate-worktree-XXXXXX")"
+        git worktree add --detach --quiet "$TMP_WORKTREE" "$local_sha"
+        
+        limpar_worktree() {
+            git worktree remove --force "$TMP_WORKTREE" 2>/dev/null || rm -rf "$TMP_WORKTREE" 2>/dev/null || true
+        }
+        trap limpar_worktree EXIT
+
+        # --- Verificação e Gestão Determinística de Dependências e Lockfiles ---
+        # 1. pnpm
+        if [ -f "$TMP_WORKTREE/pnpm-lock.yaml" ]; then
+            if [ -f "$REPO_ROOT/pnpm-lock.yaml" ] && cmp -s "$TMP_WORKTREE/pnpm-lock.yaml" "$REPO_ROOT/pnpm-lock.yaml"; then
+                [ -d "$REPO_ROOT/node_modules" ] && ln -s "$REPO_ROOT/node_modules" "$TMP_WORKTREE/node_modules" 2>/dev/null || true
+            else
+                echo "[gate] pnpm-lock.yaml divergiu do repositório principal. Instalando dependências isoladas..."
+                ( cd "$TMP_WORKTREE" && pnpm install --frozen-lockfile )
+            fi
+        # 2. npm
+        elif [ -f "$TMP_WORKTREE/package-lock.json" ]; then
+            if [ -f "$REPO_ROOT/package-lock.json" ] && cmp -s "$TMP_WORKTREE/package-lock.json" "$REPO_ROOT/package-lock.json"; then
+                [ -d "$REPO_ROOT/node_modules" ] && ln -s "$REPO_ROOT/node_modules" "$TMP_WORKTREE/node_modules" 2>/dev/null || true
+            else
+                echo "[gate] package-lock.json divergiu do repositório principal. Instalando dependências isoladas..."
+                ( cd "$TMP_WORKTREE" && npm ci --ignore-scripts )
+            fi
+        # 3. composer
+        elif [ -f "$TMP_WORKTREE/composer.lock" ]; then
+            if [ -f "$REPO_ROOT/composer.lock" ] && cmp -s "$TMP_WORKTREE/composer.lock" "$REPO_ROOT/composer.lock"; then
+                [ -d "$REPO_ROOT/vendor" ] && ln -s "$REPO_ROOT/vendor" "$TMP_WORKTREE/vendor" 2>/dev/null || true
+            else
+                echo "[gate] composer.lock divergiu do repositório principal. Instalando dependências isoladas..."
+                ( cd "$TMP_WORKTREE" && composer install --no-interaction --no-progress )
+            fi
+        fi
+
+        # Subprojetos / Monorepos (ex: client/portal do monkey-office)
+        for sub in client portal; do
+            if [ -d "$TMP_WORKTREE/$sub" ] && [ -d "$REPO_ROOT/$sub/node_modules" ]; then
+                if [ -f "$TMP_WORKTREE/$sub/package-lock.json" ] && cmp -s "$TMP_WORKTREE/$sub/package-lock.json" "$REPO_ROOT/$sub/package-lock.json"; then
+                    ln -s "$REPO_ROOT/$sub/node_modules" "$TMP_WORKTREE/$sub/node_modules" 2>/dev/null || true
+                fi
+            fi
+        done
+
+        # Python virtualenv
+        if [ -d "$REPO_ROOT/.venv" ]; then
+            ln -s "$REPO_ROOT/.venv" "$TMP_WORKTREE/.venv" 2>/dev/null || true
+        fi
+
+        # --- Isolamento Estrito de Configurações (NUNCA reutiliza .env operacional) ---
+        if [ -f "$REPO_ROOT/.env.testing" ]; then
+            cp "$REPO_ROOT/.env.testing" "$TMP_WORKTREE/.env.testing" 2>/dev/null || true
+        elif [ -f "$REPO_ROOT/.env.testing.example" ]; then
+            cp "$REPO_ROOT/.env.testing.example" "$TMP_WORKTREE/.env.testing" 2>/dev/null || true
+        fi
+
+        if [ -f "$REPO_ROOT/.env.example" ] && [ ! -f "$TMP_WORKTREE/.env" ]; then
+            cp "$REPO_ROOT/.env.example" "$TMP_WORKTREE/.env" 2>/dev/null || true
+        fi
+
+        # Fallback se scripts/check.sh não foi rastreado no commit alvo
+        if [ ! -f "$TMP_WORKTREE/scripts/check.sh" ] && [ -f "$REPO_ROOT/scripts/check.sh" ]; then
+            mkdir -p "$TMP_WORKTREE/scripts"
+            cp -r "$REPO_ROOT/scripts/"* "$TMP_WORKTREE/scripts/" 2>/dev/null || true
+            chmod +x "$TMP_WORKTREE/scripts/"*.sh 2>/dev/null || true
+        fi
+
+        GATE_EXIT=0
+        ( cd "$TMP_WORKTREE" && ./scripts/check.sh ) || GATE_EXIT=$?
+
+        limpar_worktree
+        trap - EXIT
+
+        if [ "$GATE_EXIT" -ne 0 ]; then
+            echo "" >&2
+            echo "❌ [gate] PUSH BARRADO: O commit $local_sha ($local_ref) falhou na validação isolada (código $GATE_EXIT)." >&2
+            echo "   A referência remota não foi atualizada." >&2
+            exit 1
+        fi
+    fi
+done <<< "$refs_do_push"
+
+if [ "$tem_codigo" -eq 0 ]; then
+    echo "[gate] Push contém apenas deleção de referências. Nenhum código novo para validar."
+    exit 0
+fi
+
+echo "✅ [gate] Quality Gate APROVADO com 100% de sucesso para todas as referências. Push liberado!"
+exit 0

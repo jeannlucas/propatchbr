@@ -1,0 +1,118 @@
+name: Production Deploy (VPS)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  deploy-to-vps:
+    name: Validar SemVer e Promover Produção (VPS)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout com Histórico Completo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validar Tag SemVer e Promoção Aprovada por PR
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/validate-deploy-governance.sh "${GITHUB_REF_NAME}"
+
+      - name: Verificar Configuração de Conectividade
+        id: check_config
+        env:
+          TAILSCALE_KEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          if { [ -n "$TAILSCALE_KEY" ] || [ -n "$TS_OAUTH_SECRET" ]; } && [ -n "$SSH_KEY" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Registrar Status de Deploy Pendente
+        if: steps.check_config.outputs.has_secrets != 'true'
+        shell: bash
+        run: |
+          echo "::warning::Deploy em produção pendente de configuração de secrets SSH/Tailscale."
+          {
+            echo "## ⏸️ Status: Tag Validada — Deploy Remoto Pendente"
+            echo "> **Aviso:** A tag \`${GITHUB_REF_NAME}\` passou com 100% de sucesso por todas as validações de governança e proveniência."
+            echo "> O disparo automático via SSH para a VPS **NÃO foi executado** nesta rodada porque os secrets de conectividade privada (\`TAILSCALE_AUTHKEY\` ou \`TS_OAUTH_SECRET\`) e SSH (\`VPS_SSH_KEY\`) ainda não foram configurados no repositório."
+            echo ""
+            echo "### Próximos Passos para Execução"
+            echo "1. **Para Deploy Automatizado:** Configurar os secrets \`TAILSCALE_AUTHKEY\`, \`VPS_SSH_KEY\` e \`VPS_SSH_USER\` no ambiente \`production\` do GitHub Actions."
+            echo "2. **Para Execução Manual Autorizada na VPS:**"
+            echo "   \`\`\`bash"
+            echo "   ssh bigdevz \"/usr/local/bin/propatch-deploy ${GITHUB_REF_NAME}\""
+            echo "   \`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conectar à Tailscale (Rede Privada)
+        if: steps.check_config.outputs.has_secrets == 'true'
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci-deploy
+
+      - name: Validar Conexão Tailscale e Alcance da Porta da VPS
+        if: steps.check_config.outputs.has_secrets == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET_HOST="${VPS_HOST:-100.90.8.15}"
+          TARGET_PORT="${VPS_SSH_PORT:-22}"
+
+          echo "🔍 Testando conectividade privada com a VPS ($TARGET_HOST)..."
+          tailscale ping --timeout=15s "$TARGET_HOST"
+
+          echo "🔍 Testando alcance do socket TCP na porta SSH ($TARGET_HOST:$TARGET_PORT)..."
+          if command -v nc >/dev/null 2>&1; then
+            nc -z -v -w 5 "$TARGET_HOST" "$TARGET_PORT"
+          else
+            timeout 5 bash -c "</dev/tcp/$TARGET_HOST/$TARGET_PORT"
+          fi
+          echo "✅ Conectividade Tailscale e porta SSH validadas com sucesso."
+
+      - name: Executar Deploy na VPS via SSH
+        if: steps.check_config.outputs.has_secrets == 'true'
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_USER: ${{ secrets.VPS_SSH_USER }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_SSH_PORT: ${{ secrets.VPS_SSH_PORT }}
+          TAG_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPS_HOST="${VPS_HOST:-100.90.8.15}"
+          VPS_SSH_USER="${VPS_SSH_USER:-deployer}"
+          VPS_SSH_PORT="${VPS_SSH_PORT:-22}"
+
+          mkdir -p ~/.ssh
+          echo "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "100.90.8.15 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOttXCeXd5LtLDJ6XRhW948AIus1NvbuUJyeYAD7KMW4" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -p "$VPS_SSH_PORT" "$VPS_SSH_USER@$VPS_HOST" \
+            "$TAG_NAME"
