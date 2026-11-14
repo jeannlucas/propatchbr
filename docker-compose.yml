@@ -1,11 +1,13 @@
+name: propatchbr-dev
+
 services:
-  propatch-postgres:
+  postgres:
     image: postgres:16-alpine
-    container_name: propatch_postgres
-    restart: unless-stopped
+    container_name: propatchbr-postgres-dev
+    restart: "no"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-propatch_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-propatch_dev_password}
       POSTGRES_DB: ${POSTGRES_DB:-propatch_db}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5434}:5432"
@@ -17,29 +19,31 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - propatch_net
+      propatch_net:
+        aliases:
+          - propatch-postgres
 
-  propatch-app:
+  app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: propatch_app
-    restart: unless-stopped
+    container_name: propatchbr-app-dev
+    restart: "no"
     depends_on:
-      propatch-postgres:
+      postgres:
         condition: service_healthy
     ports:
       - "127.0.0.1:${APP_PORT:-3002}:3000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-propatch_user}:${POSTGRES_PASSWORD}@propatch-postgres:5432/${POSTGRES_DB:-propatch_db}
-      AUTH_SECRET: ${AUTH_SECRET:?Defina AUTH_SECRET no .env}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-propatch_user}:${POSTGRES_PASSWORD:-propatch_dev_password}@postgres:5432/${POSTGRES_DB:-propatch_db}
+      AUTH_SECRET: ${AUTH_SECRET:-propatch_dev_auth_secret_minimum_32_characters}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3002}
       STORAGE_LOCAL_PATH: /app/storage/patches
-      ABACATEPAY_API_KEY: ${ABACATEPAY_API_KEY}
-      ABACATEPAY_WEBHOOK_SECRET: ${ABACATEPAY_WEBHOOK_SECRET}
+      ABACATEPAY_API_KEY: ${ABACATEPAY_API_KEY:-dummy_key}
+      ABACATEPAY_WEBHOOK_SECRET: ${ABACATEPAY_WEBHOOK_SECRET:-dummy_secret}
       ABACATEPAY_BASE_URL: ${ABACATEPAY_BASE_URL:-https://api.abacatepay.com/v2}
-      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
-      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-dummy_google_id}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-dummy_google_secret}
     volumes:
       - patches_data:/app/storage/patches
     networks:

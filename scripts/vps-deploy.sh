@@ -14,8 +14,8 @@ LOCK_FILE="${LOCK_FILE:-/var/lock/vps-deploy-propatchbr.lock}"
 VAR_LIB_DIR="${VAR_LIB_DIR:-/var/lib/vps-deploy/propatchbr}"
 APP_PORT="${APP_PORT:-3002}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-30}"
-CONTAINER_PG="${CONTAINER_PG:-propatch_postgres}"
-CONTAINER_APP="${CONTAINER_APP:-propatch_app}"
+CONTAINER_PG="${CONTAINER_PG:-propatchbr-postgres-prod}"
+CONTAINER_APP="${CONTAINER_APP:-propatchbr-app-prod}"
 DB_USER="${DB_USER:-propatch_user}"
 DB_NAME="${DB_NAME:-propatch_db}"
 DEPLOY_TAG="${DEPLOY_TAG:-}"
@@ -222,7 +222,10 @@ if [ ! -f "$COMPOSE_FILE" ]; then
 fi
 
 echo "📦 Compilando/validando imagem alvo da aplicação..."
+export PROPATCH_IMAGE_TAG="${DEPLOY_TAG}"
 docker compose "${COMPOSE_ARGS[@]}" build propatch-app
+docker tag "propatchbr-app:${DEPLOY_TAG}" "propatchbr-app:latest" 2>/dev/null || true
+docker tag "propatchbr-app:${DEPLOY_TAG}" "propatchbr-prod-app:latest" 2>/dev/null || true
 
 echo "🔍 Validando carregamento de dependências de migração (postgres/drizzle) na imagem..."
 if ! docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node -e "
