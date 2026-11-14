@@ -64,6 +64,13 @@ if [[ "$*" =~ "SELECT 1" ]]; then
   exit 0
 fi
 
+if [[ "$*" =~ "drizzle-orm" ]] || [[ "$*" =~ "require('postgres')" ]]; then
+  if [ "${MOCK_DEP_FAIL:-0}" = 1 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ "$*" =~ ps ]]; then
   echo "propatch_postgres"
   echo "propatch_app"
@@ -230,8 +237,25 @@ fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 3: Escritor ativo que não para bloqueia antes do snapshot
+# Cenário 2B: Falha no pré-voo de dependências aborta ANTES de parar escritores
 # ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 2B: Falha no pré-voo de dependências aborta ANTES de parar escritores .. "
+export MOCK_DEP_FAIL=1
+> "$EVENTS_LOG"
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1; then
+  echo "❌ FALHOU (Deveria ter abortado por falha no pré-voo de dependências)"
+  exit 1
+fi
+unset MOCK_DEP_FAIL
+if grep -q "stop propatch-app" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Parou escritores mesmo com falha no pré-voo de dependências)"
+  exit 1
+fi
+if grep -q "pg_dump" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Executou dump mesmo com falha no pré-voo de dependências)"
+  exit 1
+fi
+echo "✅ PASSOU"
 echo -n "🧪 Cenário 3: Escritor ativo bloqueia antes do snapshot .. "
 (
   cd "$INIT_REPO"
@@ -397,6 +421,6 @@ rm -f "$VAR_LIB/recuperacao_pendente"
 echo "✅ PASSOU"
 
 echo "=========================================================="
-echo "🎉 Todos os 7 cenários de transição passaram 100% no ProPatch BR!"
+echo "🎉 Todos os 8 cenários de transição passaram 100% no ProPatch BR!"
 echo "=========================================================="
 exit 0
