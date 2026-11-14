@@ -277,7 +277,105 @@ if [ "$USER_DATA_COUNT2" -ne 1 ]; then
 fi
 echo "✅ PASSOU"
 
+# ------------------------------------------------------------------------------
+# Cenário 7: Imagem sem dependência aborta fail-closed antes de alterar o banco
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 7: Imagem sem módulo exigido aborta antes de tocar no banco .. "
+if ! docker image inspect propatch-test-fixed >/dev/null 2>&1; then
+  docker build -t propatch-test-fixed . >/dev/null 2>&1
+fi
+if ! docker image inspect propatch-test-fail >/dev/null 2>&1; then
+  printf "FROM propatch-test-fixed\nUSER root\nRUN rm -rf /app/node_modules/postgres\nUSER nextjs\n" | docker build -t propatch-test-fail - >/dev/null 2>&1
+fi
+docker exec "$CONTAINER_NAME" createdb -h 127.0.0.1 -U propatch_user db_docker_fail
+docker exec -i "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_fail < drizzle/0000_lame_onslaught.sql >/dev/null 2>&1
+
+set +e
+FAIL_OUT=$(docker run --rm propatch-test-fail node scripts/migrate.js --allow-baseline 2>&1)
+FAIL_EXIT=$?
+set -e
+
+if [ "$FAIL_EXIT" -eq 0 ]; then
+  echo "❌ FALHOU: container sem módulo deveria ter falhado"
+  exit 1
+fi
+if ! echo "$FAIL_OUT" | grep -q "MODULE_NOT_FOUND"; then
+  echo "❌ FALHOU: erro MODULE_NOT_FOUND esperado não ocorreu"
+  exit 1
+fi
+
+HAS_DRIZZLE_DOCKER_FAIL=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_fail -tAc "SELECT count(*) FROM information_schema.tables WHERE table_schema='drizzle';")
+if [ "$HAS_DRIZZLE_DOCKER_FAIL" -ne 0 ]; then
+  echo "❌ FALHOU: gravou histórico em falha de módulo"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 8: Imagem final corrigida executa baseline e preserva dados
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 8: Imagem final executa baseline e preserva dados sobre base legada .. "
+docker exec "$CONTAINER_NAME" createdb -h 127.0.0.1 -U propatch_user db_docker_success
+docker exec -i "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_success < drizzle/0000_lame_onslaught.sql >/dev/null 2>&1
+
+# Inserir registro no banco legado para validação de integridade de dados
+docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_success -c "INSERT INTO users (id, email, password_hash) VALUES ('00000000-0000-0000-0000-000000000002', 'producao@propatchbr.com', 'hash_prod');" >/dev/null 2>&1
+
+# No Mac com Docker Desktop, host.docker.internal conecta na porta exposta no host
+docker run --rm -e DATABASE_URL="postgresql://propatch_user:test_password@host.docker.internal:${TEST_PORT}/db_docker_success" propatch-test-fixed node scripts/migrate.js --allow-baseline >/dev/null 2>&1
+
+DOCKER_MIG_ENTRY=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_success -tAc "SELECT count(*) FROM drizzle.__drizzle_migrations;")
+if [ "$DOCKER_MIG_ENTRY" -ne 1 ]; then
+  echo "❌ FALHOU: baseline não registrado pela imagem final (encontrado: $DOCKER_MIG_ENTRY)"
+  exit 1
+fi
+
+DOCKER_USER_COUNT=$(docker exec "$CONTAINER_NAME" psql -h 127.0.0.1 -U propatch_user -d db_docker_success -tAc "SELECT count(*) FROM users WHERE email='producao@propatchbr.com';")
+if [ "$DOCKER_USER_COUNT" -ne 1 ]; then
+  echo "❌ FALHOU: dados do usuário foram perdidos no baseline via Docker"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 9: Subida da aplicação na imagem final responde HTTP 200 conectada ao banco
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 9: Imagem final sobe aplicação e responde HTTP 200 com banco migrado .. "
+APP_TEST_CONTAINER="propatch-app-test-${RANDOM}"
+APP_TEST_PORT=3098
+for p in 3098 3097 3096; do
+  if ! lsof -i :$p >/dev/null 2>&1; then
+    APP_TEST_PORT=$p
+    break
+  fi
+done
+
+docker run -d --rm --name "$APP_TEST_CONTAINER" \
+  -p "127.0.0.1:${APP_TEST_PORT}:3000" \
+  -e DATABASE_URL="postgresql://propatch_user:test_password@host.docker.internal:${TEST_PORT}/db_docker_success" \
+  -e AUTH_SECRET="propatch_test_secret_key_min_32_characters_long_2026" \
+  -e PORT=3000 \
+  propatch-test-fixed >/dev/null 2>&1
+
+APP_OK=0
+for _ in $(seq 1 30); do
+  CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_TEST_PORT}/" 2>/dev/null || true)
+  if [ "$CODE" = "200" ]; then
+    APP_OK=1
+    break
+  fi
+  sleep 0.5
+done
+
+docker stop "$APP_TEST_CONTAINER" >/dev/null 2>&1 || true
+
+if [ "$APP_OK" -ne 1 ]; then
+  echo "❌ FALHOU: aplicação na imagem final não respondeu HTTP 200"
+  exit 1
+fi
+echo "✅ PASSOU"
+
 echo "=========================================================="
-echo "🎉 Todos os 8 cenários de baseline e migração passaram 100%!"
+echo "🎉 Todos os 11 cenários de baseline e migração passaram 100%!"
 echo "=========================================================="
 exit 0

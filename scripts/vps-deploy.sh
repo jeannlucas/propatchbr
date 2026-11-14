@@ -210,6 +210,38 @@ if ! docker exec -i "$CONTAINER_PG" psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 
 fi
 echo "✅ Pré-voo do banco aprovado com 100% de sucesso."
 
+# 6.2 Atualização do Código e Pré-Voo de Dependências do Migrador ANTES de Parar Escritores
+if [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
+  echo "🔄 Atualizando repositório para o commit $TARGET_SHA..."
+  git reset --hard "$TARGET_SHA" -q
+fi
+
+if [ ! -f "$COMPOSE_FILE" ]; then
+  echo "❌ Manifesto de produção ($COMPOSE_FILE) ausente no commit de destino." >&2
+  exit 1
+fi
+
+echo "📦 Compilando/validando imagem alvo da aplicação..."
+docker compose "${COMPOSE_ARGS[@]}" build propatch-app
+
+echo "🔍 Validando carregamento de dependências de migração (postgres/drizzle) na imagem..."
+if ! docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node -e "
+  try {
+    require('postgres');
+    require('drizzle-orm');
+  } catch (err) {
+    process.exit(1);
+  }
+" >/dev/null 2>&1; then
+  echo "❌ ERRO DE PRÉ-VOO: Imagem da aplicação não possui dependências completas (postgres/drizzle) para migração!" >&2
+  echo "   Nenhum serviço foi interrompido. Deploy abortado fail-closed." >&2
+  if [ "$PREVIOUS_COMMIT" != "legacy" ] && [ -d "$TARGET_DIR/.git" ]; then
+    git reset --hard "$PREVIOUS_COMMIT" -q 2>/dev/null || true
+  fi
+  exit 1
+fi
+echo "✅ Pré-voo de dependências do migrador aprovado com 100% de sucesso."
+
 # 7. Identificação de Escritores e Preservação de Imagem Legada
 LEGACY_APP_IMAGE_ID=$(docker inspect "$CONTAINER_APP" --format '{{.Image}}' 2>/dev/null || true)
 if [ -n "$LEGACY_APP_IMAGE_ID" ]; then
@@ -302,21 +334,7 @@ fi
 printf 'SHA=%s\nTAG=%s\nBACKUP=%s\nCHECKSUM=%s\n' "$PREVIOUS_COMMIT" "$DEPLOY_TAG" "$BACKUP_FILE" "$SHA_FILE" > "$RECOVERY_PENDING"
 echo "✅ Snapshot verificado e checksum registrado com sucesso."
 
-# 10. Atualização do Código para a Versão Alvo
-if [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
-  echo "🔄 Atualizando repositório para o commit $TARGET_SHA..."
-  git reset --hard "$TARGET_SHA" -q
-fi
-
-# 11. Compilação e Migração de Banco com Baseline Drizzle
-if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "❌ Manifesto de produção ($COMPOSE_FILE) ausente no commit de destino." >&2
-  exit 1
-fi
-
-echo "📦 Construindo imagem atualizada..."
-docker compose "${COMPOSE_ARGS[@]}" build propatch-app
-
+# 10. Execução de Migração de Banco com Baseline Drizzle
 MIGRATIONS_RAN=1
 echo "📦 Executando migrações seguras com baseline Drizzle..."
 if [ "$ALLOW_BASELINE" -eq 1 ] || [ "${ALLOW_BASELINE:-0}" = "true" ]; then
