@@ -20,6 +20,7 @@ DB_USER="${DB_USER:-propatch_user}"
 DB_NAME="${DB_NAME:-propatch_db}"
 DEPLOY_TAG="${DEPLOY_TAG:-}"
 SKIP_GIT_CHECKOUT="${SKIP_GIT_CHECKOUT:-0}"
+ALLOW_BASELINE="${ALLOW_BASELINE:-0}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -27,13 +28,18 @@ while [ $# -gt 0 ]; do
       DEPLOY_TAG="$2"
       shift 2
       ;;
+    --allow-baseline)
+      ALLOW_BASELINE=1
+      shift
+      ;;
     --skip-checkout)
       SKIP_GIT_CHECKOUT=1
       shift
       ;;
     --help|-h)
-      echo "Uso: $0 [--tag vX.Y.Z] [--skip-checkout]"
+      echo "Uso: $0 [--tag vX.Y.Z] [--allow-baseline] [--skip-checkout]"
       echo "  --tag: Tag SemVer vMAJOR.MINOR.PATCH a implantar"
+      echo "  --allow-baseline: Autoriza modo explícito de baseline para bancos legados"
       echo "  --skip-checkout: Executa migração e subida sem checkout git (modo teste/local)"
       exit 0
       ;;
@@ -307,7 +313,11 @@ docker compose "${COMPOSE_ARGS[@]}" build propatch-app
 
 MIGRATIONS_RAN=1
 echo "📦 Executando migrações seguras com baseline Drizzle..."
-docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node scripts/migrate.js
+if [ "$ALLOW_BASELINE" -eq 1 ] || [ "${ALLOW_BASELINE:-0}" = "true" ]; then
+  docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node scripts/migrate.js --allow-baseline
+else
+  docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node scripts/migrate.js
+fi
 
 echo "🚀 Subindo serviços atualizados..."
 docker compose "${COMPOSE_ARGS[@]}" up -d propatch-app

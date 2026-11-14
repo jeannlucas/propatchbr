@@ -212,7 +212,7 @@ echo "✅ PASSOU"
 echo -n "🧪 Cenário 2: Falha no pré-voo aborta ANTES de parar escritores .. "
 export MOCK_DB_AUTH_FAIL=1
 > "$EVENTS_LOG"
-if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1; then
   echo "❌ FALHOU (Deveria ter abortado por falha no pré-voo)"
   exit 1
 fi
@@ -234,7 +234,7 @@ echo -n "🧪 Cenário 3: Escritor ativo bloqueia antes do snapshot .. "
 )
 export MOCK_WRITER_RUNNING=1
 > "$EVENTS_LOG"
-if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1; then
   echo "❌ FALHOU (Deveria ter bloqueado com escritor ativo)"
   exit 1
 fi
@@ -251,7 +251,7 @@ echo "✅ PASSOU"
 echo -n "🧪 Cenário 4: Falha no snapshot bloqueia antes da migração .. "
 export MOCK_DUMP_FAIL=1
 > "$EVENTS_LOG"
-if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1; then
   echo "❌ FALHOU (Deveria ter bloqueado por falha no dump)"
   exit 1
 fi
