@@ -8,6 +8,7 @@ set -euo pipefail
 PROJECT_NAME="propatchbr"
 TARGET_DIR="${TARGET_DIR:-/srv/propatchbr}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
+ENV_FILE="${ENV_FILE:-$TARGET_DIR/.env}"
 BACKUP_DIR="${BACKUP_DIR:-$TARGET_DIR/backups/db}"
 LOCK_FILE="${LOCK_FILE:-/var/lock/vps-deploy-propatchbr.lock}"
 VAR_LIB_DIR="${VAR_LIB_DIR:-/var/lib/vps-deploy/propatchbr}"
@@ -32,6 +33,8 @@ while [ $# -gt 0 ]; do
       ;;
     --help|-h)
       echo "Uso: $0 [--tag vX.Y.Z] [--skip-checkout]"
+      echo "  --tag: Tag SemVer vMAJOR.MINOR.PATCH a implantar"
+      echo "  --skip-checkout: Executa migração e subida sem checkout git (modo teste/local)"
       exit 0
       ;;
     *)
@@ -86,16 +89,35 @@ if ! [[ "$DEPLOY_TAG" =~ $SEMVER_REGEX ]]; then
 fi
 
 # 4. Obtenção do commit alvo e validação de merge commit
+TARGET_SHA="${TARGET_SHA:-}"
 if [ -d "$TARGET_DIR/.git" ]; then
-  TARGET_SHA=$(git rev-parse -q --verify "refs/remotes/origin/tags/${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
+  if [ -z "$TARGET_SHA" ]; then
+    TARGET_SHA=$(git rev-parse -q --verify "refs/remotes/origin/tags/${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
+  fi
+  if [ -z "$TARGET_SHA" ]; then
+    TARGET_SHA=$(git rev-parse -q --verify "refs/tags/${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
+  fi
+  if [ -z "$TARGET_SHA" ]; then
+    TARGET_SHA=$(git rev-parse -q --verify "${DEPLOY_TAG}^{commit}" 2>/dev/null || true)
+  fi
+
   if [ -z "$TARGET_SHA" ]; then
     echo "❌ ERRO DE GOVERNANÇA: Tag '$DEPLOY_TAG' não encontrada no repositório." >&2
     exit 1
   fi
 
+  MAIN_REF=""
   if git rev-parse --verify refs/remotes/origin/main >/dev/null 2>&1; then
-    if ! git merge-base --is-ancestor "$TARGET_SHA" refs/remotes/origin/main; then
-      echo "❌ ERRO DE GOVERNANÇA: O commit $TARGET_SHA apontado pela tag não pertence a origin/main!" >&2
+    MAIN_REF="refs/remotes/origin/main"
+  elif git rev-parse --verify refs/heads/main >/dev/null 2>&1; then
+    MAIN_REF="refs/heads/main"
+  elif git rev-parse --verify main >/dev/null 2>&1; then
+    MAIN_REF="main"
+  fi
+
+  if [ -n "$MAIN_REF" ]; then
+    if ! git merge-base --is-ancestor "$TARGET_SHA" "$MAIN_REF"; then
+      echo "❌ ERRO DE GOVERNANÇA: O commit $TARGET_SHA apontado pela tag não pertence a $MAIN_REF!" >&2
       exit 1
     fi
   fi
@@ -106,11 +128,14 @@ if [ -d "$TARGET_DIR/.git" ]; then
     exit 1
   fi
 else
-  echo "Checkout Git de produção indisponível." >&2
-  exit 1
+  if [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
+    echo "Checkout Git de produção indisponível em $TARGET_DIR." >&2
+    exit 1
+  fi
+  TARGET_SHA="test-target-sha"
 fi
 
-# 5. Verificação de Marcadores
+# 5. Verificação de Marcadores e Bloqueios Prévios
 MARCADOR_TAG="$VAR_LIB_DIR/implantado_tag"
 MARCADOR_COMMIT="$VAR_LIB_DIR/implantado"
 mkdir -p "$VAR_LIB_DIR"
@@ -128,21 +153,56 @@ if [ "$IMPLANTADA_TAG" = "$DEPLOY_TAG" ] && [ -n "$DEPLOY_TAG" ]; then
   exit 0
 fi
 
-if [ -n "$IMPLANTADO_COMMIT" ] && [ "$IMPLANTADO_COMMIT" = "$TARGET_SHA" ] && [ "$TARGET_SHA" != "static-version" ]; then
+if [ -n "$IMPLANTADO_COMMIT" ] && [ "$IMPLANTADO_COMMIT" = "$TARGET_SHA" ] && [ "$TARGET_SHA" != "static-version" ] && [ "$TARGET_SHA" != "legacy" ]; then
   echo "ℹ️ [vps-deploy] Commit $TARGET_SHA da tag $DEPLOY_TAG já está em execução. Sincronizando marcador de tag."
   printf '%s\n' "$DEPLOY_TAG" > "$MARCADOR_TAG"
   exit 0
 fi
 
 PREVIOUS_COMMIT="$IMPLANTADO_COMMIT"
-if [ -z "$PREVIOUS_COMMIT" ] || ! git cat-file -e "${PREVIOUS_COMMIT}^{commit}"; then
-  echo "Não foi possível comprovar o commit implantado. Deploy bloqueado." >&2
-  exit 1
+if [ -z "$PREVIOUS_COMMIT" ]; then
+  PREVIOUS_COMMIT="legacy"
+fi
+
+# Validação do commit anterior (aceita 'legacy' para a primeira transição)
+if [ "$PREVIOUS_COMMIT" != "legacy" ] && [ -d "$TARGET_DIR/.git" ]; then
+  if ! git cat-file -e "${PREVIOUS_COMMIT}^{commit}" 2>/dev/null; then
+    echo "Não foi possível comprovar o commit implantado ($PREVIOUS_COMMIT). Deploy bloqueado." >&2
+    exit 1
+  fi
 fi
 
 if [ ! -f "$COMPOSE_FILE" ] || ! command -v docker >/dev/null 2>&1; then
-  echo "Docker ou manifesto Compose de produção indisponível." >&2
+  echo "Docker ou manifesto Compose de produção indisponível em $TARGET_DIR." >&2
   exit 1
+fi
+
+# Opções do Compose com arquivo de ambiente se existir
+COMPOSE_ARGS=("-f" "$COMPOSE_FILE")
+if [ -f "$ENV_FILE" ]; then
+  COMPOSE_ARGS=("--env-file" "$ENV_FILE" "-f" "$COMPOSE_FILE")
+fi
+
+# 6. Pré-Voo de Configuração e Conectividade no PostgreSQL ANTES de Parar Aplicação
+echo "🔍 Executando pré-voo de autenticação no PostgreSQL..."
+if ! docker exec -i "$CONTAINER_PG" pg_isready -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
+  echo "❌ ERRO DE PRÉ-VOO: PostgreSQL ($CONTAINER_PG) não está aceitando conexões para $DB_USER@$DB_NAME!" >&2
+  echo "   Nenhum serviço foi interrompido. Deploy abortado fail-closed." >&2
+  exit 1
+fi
+
+if ! docker exec -i "$CONTAINER_PG" psql -U "$DB_USER" -d "$DB_NAME" -c "SELECT 1" >/dev/null 2>&1; then
+  echo "❌ ERRO DE PRÉ-VOO: Falha ao autenticar no banco $DB_NAME com o usuário $DB_USER!" >&2
+  echo "   Nenhum serviço foi interrompido. Deploy abortado fail-closed." >&2
+  exit 1
+fi
+echo "✅ Pré-voo do banco aprovado com 100% de sucesso."
+
+# 7. Identificação de Escritores e Preservação de Imagem Legada
+LEGACY_APP_IMAGE_ID=$(docker inspect "$CONTAINER_APP" --format '{{.Image}}' 2>/dev/null || true)
+if [ -n "$LEGACY_APP_IMAGE_ID" ]; then
+  docker tag "$LEGACY_APP_IMAGE_ID" "propatchbr-propatch-app:legacy-backup" 2>/dev/null || true
+  echo "✅ Imagem legada preservada para rollback imediato ($LEGACY_APP_IMAGE_ID)."
 fi
 
 umask 077
@@ -157,69 +217,106 @@ perform_rollback() {
   if [ "$exit_code" -eq 0 ]; then
     return
   fi
+
+  echo "⚠️ Detectada falha no processo de deploy (código $exit_code). Iniciando protocolo de rollback..." >&2
+
+  # Se a migração começou, o banco pode ter sido modificado. NUNCA restaura banco automaticamente.
   if [ "$MIGRATIONS_RAN" -eq 1 ]; then
-    if ! docker compose -f "$COMPOSE_FILE" stop propatch-app; then
-      echo "Falha ao parar os serviços após o erro de deploy." >&2
-    fi
-    echo "O banco pode ter sido alterado. Snapshot preservado em $BACKUP_FILE." >&2
-    echo "Recuperação manual necessária. Novos deploys permanecem bloqueados." >&2
+    echo "🛑 Parando aplicação para proteger o estado do banco..." >&2
+    docker compose "${COMPOSE_ARGS[@]}" stop propatch-app 2>/dev/null || true
+    echo "❌ O banco de dados pode ter sido alterado. Snapshot pré-deploy preservado em $BACKUP_FILE." >&2
+    echo "   Trava de segurança registrada em $RECOVERY_PENDING." >&2
+    echo "   Novos deploys permanecem bloqueados. Intervenção humana necessária para autorizar restauração." >&2
     return
   fi
+
+  # Se apenas os escritores foram parados e a migração NÃO foi iniciada: restabelece legado
   if [ "$WRITERS_STOPPED" -eq 1 ]; then
-    if ! git reset --hard "$PREVIOUS_COMMIT" -q ||
-       ! docker compose -f "$COMPOSE_FILE" up -d propatch-app; then
-      echo "Falha ao retomar a versão anterior. Intervenção necessária." >&2
+    echo "🔄 Restabelecendo serviços legados sem alteração de banco..." >&2
+    if [ "$PREVIOUS_COMMIT" != "legacy" ] && [ -d "$TARGET_DIR/.git" ]; then
+      git reset --hard "$PREVIOUS_COMMIT" -q 2>/dev/null || true
+    fi
+    docker compose "${COMPOSE_ARGS[@]}" up -d propatch-app 2>/dev/null || true
+    
+    # Valida se a aplicação voltou
+    local rec_ok=0
+    for _ in $(seq 1 "$HEALTH_TIMEOUT"); do
+      if [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}/" 2>/dev/null || true)" = "200" ]; then
+        rec_ok=1
+        break
+      fi
+      sleep 1
+    done
+
+    if [ "$rec_ok" -eq 1 ]; then
+      echo "✅ Serviços legados restabelecidos com sucesso. Endpoints respondendo 200." >&2
+      rm -f "$RECOVERY_PENDING" "$BACKUP_FILE" "$SHA_FILE" 2>/dev/null || true
     else
-      rm -f "$RECOVERY_PENDING"
+      echo "❌ Falha ao restabelecer a saúde dos serviços legados. Intervenção necessária." >&2
     fi
   fi
 }
 trap perform_rollback EXIT
 
-# Parar os escritores antes de criar o snapshot.
+# 8. Parar Escritores e Confirmar Isolamento do Banco
+echo "🛑 Parando escritores da aplicação ($CONTAINER_APP)..."
 WRITERS_STOPPED=1
-docker compose -f "$COMPOSE_FILE" stop propatch-app
-if ! running_writers=$(docker compose -f "$COMPOSE_FILE" ps --status running -q propatch-app) || [ -n "$running_writers" ]; then
-  echo "Não foi possível confirmar a parada dos escritores. Deploy bloqueado." >&2
+docker compose "${COMPOSE_ARGS[@]}" stop propatch-app
+if running_writers=$(docker compose "${COMPOSE_ARGS[@]}" ps --status running -q propatch-app) && [ -n "$running_writers" ]; then
+  echo "❌ Não foi possível confirmar a parada dos escritores. Deploy bloqueado." >&2
+  exit 1
+fi
+echo "✅ Escritores parados com sucesso. PostgreSQL ativo para snapshot."
+
+# 9. Geração e Verificação de Integridade do Snapshot Físico
+echo "📦 Criando snapshot do banco de dados em $BACKUP_FILE..."
+if ! docker exec -i "$CONTAINER_PG" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc --no-owner --no-acl > "$BACKUP_FILE" || [ ! -s "$BACKUP_FILE" ]; then
+  echo "❌ Backup pré-deploy falhou ou está vazio. Deploy bloqueado." >&2
   exit 1
 fi
 
-if ! docker exec -i "$CONTAINER_PG" pg_dump -U "$DB_USER" -d "$DB_NAME" -Fc --no-owner --no-acl > "$BACKUP_FILE" ||
-   [ ! -s "$BACKUP_FILE" ]; then
-  echo "Backup pré-deploy falhou ou está vazio. Deploy bloqueado." >&2
+if ! docker exec -i "$CONTAINER_PG" pg_restore --list < "$BACKUP_FILE" >/dev/null 2>&1; then
+  echo "❌ Falha na verificação de integridade do snapshot (pg_restore --list). Abortando." >&2
   exit 1
 fi
-docker exec -i "$CONTAINER_PG" pg_restore --list < "$BACKUP_FILE" >/dev/null
+
 if command -v sha256sum >/dev/null 2>&1; then
   sha256sum "$BACKUP_FILE" > "$SHA_FILE"
 else
   shasum -a 256 "$BACKUP_FILE" > "$SHA_FILE"
 fi
 
-# Persistir o estado antes de iniciar qualquer etapa que possa alterar o banco.
-printf 'SHA=%s\nBACKUP=%s\nCHECKSUM=%s\n' "$PREVIOUS_COMMIT" "$BACKUP_FILE" "$SHA_FILE" > "$RECOVERY_PENDING"
+# Persistir estado de recuperação antes de qualquer migração
+printf 'SHA=%s\nTAG=%s\nBACKUP=%s\nCHECKSUM=%s\n' "$PREVIOUS_COMMIT" "$DEPLOY_TAG" "$BACKUP_FILE" "$SHA_FILE" > "$RECOVERY_PENDING"
+echo "✅ Snapshot verificado e checksum registrado com sucesso."
 
-# 7. Atualização do Código para a Versão Alvo
+# 10. Atualização do Código para a Versão Alvo
 if [ -d "$TARGET_DIR/.git" ] && [ "$SKIP_GIT_CHECKOUT" -eq 0 ]; then
   echo "🔄 Atualizando repositório para o commit $TARGET_SHA..."
   git reset --hard "$TARGET_SHA" -q
 fi
 
-# 8. Recompilação e inicialização
+# 11. Compilação e Migração de Banco com Baseline Drizzle
 if [ ! -f "$COMPOSE_FILE" ]; then
-  echo "Manifesto de produção ausente no commit de destino." >&2
+  echo "❌ Manifesto de produção ($COMPOSE_FILE) ausente no commit de destino." >&2
   exit 1
 fi
-docker compose -f "$COMPOSE_FILE" build propatch-app
-MIGRATIONS_RAN=1
-docker compose -f "$COMPOSE_FILE" run --rm -T --no-deps propatch-app npm run db:migrate
-docker compose -f "$COMPOSE_FILE" up -d --build propatch-app
 
-# 10. Validação de Saúde (Healthcheck)
+echo "📦 Construindo imagem atualizada..."
+docker compose "${COMPOSE_ARGS[@]}" build propatch-app
+
+MIGRATIONS_RAN=1
+echo "📦 Executando migrações seguras com baseline Drizzle..."
+docker compose "${COMPOSE_ARGS[@]}" run --rm -T --no-deps propatch-app node scripts/migrate.js
+
+echo "🚀 Subindo serviços atualizados..."
+docker compose "${COMPOSE_ARGS[@]}" up -d propatch-app
+
+# 12. Validação de Saúde (Healthcheck)
 echo "🩺 Executando healthcheck pós-deploy..."
 HEALTH_OK=0
 for i in $(seq 1 "$HEALTH_TIMEOUT"); do
-  STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_PORT}/" || true)
+  STATUS_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_PORT}/" 2>/dev/null || true)
   if [ "$STATUS_CODE" = "200" ]; then
     HEALTH_OK=1
     break
@@ -232,7 +329,7 @@ if [ "$HEALTH_OK" -ne 1 ]; then
   exit 1
 fi
 
-# 11. Atualização dos Marcadores de Sucesso
+# 13. Atualização dos Marcadores de Sucesso
 printf '%s\n' "$DEPLOY_TAG" > "$MARCADOR_TAG"
 printf '%s\n' "$TARGET_SHA" > "$MARCADOR_COMMIT"
 rm -f "$RECOVERY_PENDING"

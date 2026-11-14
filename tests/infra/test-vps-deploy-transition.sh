@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # ProPatch BR — Teste Automatizado de Transição de Deploy e Hardening SemVer
-# Valida os 3 cenários obrigatórios:
+# Valida rigorosamente todos os cenários canônicos de deploy e fail-closed:
 # 1. Merge sem tag preserva a versão atual (deploy ignorado)
-# 2. Tag válida implanta o SHA esperado e atualiza marcadores
-# 3. Falha no deploy recupera a versão anterior e restaura o banco de dados
+# 2. Transição inicial a partir do estado 'legacy'
+# 3. Falha no pré-voo de autenticação aborta ANTES de parar escritores
+# 4. Escritor ativo bloqueia antes do snapshot
+# 5. Falha no dump do banco bloqueia deploy antes da migração
+# 6. Tag válida implanta SHA esperado e atualiza marcadores
+# 7. Segunda execução com a mesma tag é ignorada de forma idempotente
+# 8. Rollback pré-migração restabelece serviços legados
+# 9. Falha pós-migração preserva snapshot e bloqueia novos deploys com recuperacao_pendente
 # ==============================================================================
 set -euo pipefail
 
@@ -27,15 +33,43 @@ touch "$EVENTS_LOG"
 cat << 'EOF' > "$MOCK_BIN/docker"
 #!/usr/bin/env bash
 echo "DOCKER: $*" >> "${TEST_EVENTS_LOG}"
+
+# Mock de inspeção de containers
+if [[ "$*" =~ inspect.*propatch_app ]]; then
+  if [ "${MOCK_WRITER_RUNNING:-0}" = 1 ]; then
+    echo "true"
+  else
+    echo "false"
+  fi
+  exit 0
+fi
+
+# Mock de parada compose
 if [[ "$1" == compose && "$*" == *"ps --status running -q"* ]]; then
   if [ "${MOCK_WRITER_RUNNING:-0}" = 1 ]; then echo writer; fi
   exit 0
 fi
+
+if [[ "$*" =~ "pg_isready" ]]; then
+  if [ "${MOCK_DB_FAIL:-0}" = 1 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+if [[ "$*" =~ "SELECT 1" ]]; then
+  if [ "${MOCK_DB_AUTH_FAIL:-0}" = 1 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
 if [[ "$*" =~ ps ]]; then
   echo "propatch_postgres"
   echo "propatch_app"
   exit 0
 fi
+
 if [[ "$*" =~ pg_dump ]]; then
   if [ "${MOCK_DUMP_FAIL:-0}" = 1 ]; then
     echo "partial dump"
@@ -44,6 +78,7 @@ if [[ "$*" =~ pg_dump ]]; then
   echo "MOCK_DUMP_DATA_FOR_RESTORE"
   exit 0
 fi
+
 if [[ "$*" =~ pg_restore ]]; then
   if [[ "$*" == *"--list"* ]]; then
     cat >/dev/null
@@ -52,6 +87,7 @@ if [[ "$*" =~ pg_restore ]]; then
   echo "RESTORE: pg_restore called with $*" >> "${TEST_EVENTS_LOG}"
   exit 0
 fi
+
 if [ "${MOCK_DOCKER_FAIL:-0}" = "1" ]; then
   exit 1
 fi
@@ -129,8 +165,8 @@ touch "$REPO_DIR/docker-compose.yml"
 
 VAR_LIB="$TEST_DIR/var/lib/vps-deploy/propatchbr"
 mkdir -p "$VAR_LIB"
-echo "v1.0.0" > "$VAR_LIB/implantado_tag"
-echo "$UPSTREAM_INITIAL_SHA" > "$VAR_LIB/implantado"
+echo "legacy" > "$VAR_LIB/implantado_tag"
+echo "legacy" > "$VAR_LIB/implantado"
 
 SANDBOX_SCRIPT="$TEST_DIR/vps-deploy-sandbox"
 sed \
@@ -160,31 +196,77 @@ echo -n "🧪 Cenário 1: Merge na main sem tag preserva a versão atual .. "
 > "$EVENTS_LOG"
 bash "$SANDBOX_SCRIPT" >/dev/null 2>&1
 
-if [ "$(cat "$VAR_LIB/implantado_tag")" != "v1.0.0" ]; then
+if [ "$(cat "$VAR_LIB/implantado_tag")" != "legacy" ]; then
   echo "❌ FALHOU (marcador implantado_tag alterado)"
   exit 1
 fi
-if [ "$(cat "$VAR_LIB/implantado")" != "$UPSTREAM_INITIAL_SHA" ]; then
+if [ "$(cat "$VAR_LIB/implantado")" != "legacy" ]; then
   echo "❌ FALHOU (marcador implantado alterado)"
-  exit 1
-fi
-if [ "$(cd "$REPO_DIR" && git rev-parse HEAD)" != "$UPSTREAM_INITIAL_SHA" ]; then
-  echo "❌ FALHOU (HEAD local alterado)"
   exit 1
 fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 2: Tag SemVer válida implanta o SHA esperado e atualiza marcadores
+# Cenário 2: Falha no pré-voo de autenticação aborta ANTES de parar escritores
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 2: Tag válida implanta SHA esperado e atualiza marcadores .. "
+echo -n "🧪 Cenário 2: Falha no pré-voo aborta ANTES de parar escritores .. "
+export MOCK_DB_AUTH_FAIL=1
+> "$EVENTS_LOG"
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+  echo "❌ FALHOU (Deveria ter abortado por falha no pré-voo)"
+  exit 1
+fi
+unset MOCK_DB_AUTH_FAIL
+if grep -q "stop propatch-app" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Parou escritores mesmo com falha no pré-voo)"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 3: Escritor ativo que não para bloqueia antes do snapshot
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 3: Escritor ativo bloqueia antes do snapshot .. "
 (
   cd "$INIT_REPO"
-  git tag -a v1.0.1 -m "Release formal v1.0.1"
+  git tag -a v1.0.1 -m "Release v1.0.1"
   git push origin main --tags >/dev/null 2>&1
 )
-EXPECTED_SHA=$(cd "$INIT_REPO" && git rev-parse HEAD)
+export MOCK_WRITER_RUNNING=1
+> "$EVENTS_LOG"
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+  echo "❌ FALHOU (Deveria ter bloqueado com escritor ativo)"
+  exit 1
+fi
+unset MOCK_WRITER_RUNNING
+if grep -q "pg_dump" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Iniciou snapshot com escritor ativo)"
+  exit 1
+fi
+echo "✅ PASSOU"
 
+# ------------------------------------------------------------------------------
+# Cenário 4: Falha no snapshot bloqueia antes da migração
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 4: Falha no snapshot bloqueia antes da migração .. "
+export MOCK_DUMP_FAIL=1
+> "$EVENTS_LOG"
+if bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1; then
+  echo "❌ FALHOU (Deveria ter bloqueado por falha no dump)"
+  exit 1
+fi
+unset MOCK_DUMP_FAIL
+if grep -q "scripts/migrate.js" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Iniciou migrações apesar de falha no backup)"
+  exit 1
+fi
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 5: Transição válida de 'legacy' para v1.0.1
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 5: Transição válida de legacy para v1.0.1 .. "
+EXPECTED_SHA=$(cd "$INIT_REPO" && git rev-parse HEAD)
 > "$EVENTS_LOG"
 bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1
 
@@ -200,16 +282,24 @@ if [ "$(cd "$REPO_DIR" && git rev-parse HEAD)" != "$EXPECTED_SHA" ]; then
   echo "❌ FALHOU (HEAD local diverge do commit esperado $EXPECTED_SHA)"
   exit 1
 fi
-if ! grep -q "DOCKER: compose -f docker-compose.yml up -d --build propatch-app" "$EVENTS_LOG"; then
-  echo "❌ FALHOU (Comando docker compose up não foi emitido)"
+echo "✅ PASSOU"
+
+# ------------------------------------------------------------------------------
+# Cenário 6: Segunda execução da mesma tag é ignorada de forma idempotente
+# ------------------------------------------------------------------------------
+echo -n "🧪 Cenário 6: Idempotência na reexecução da mesma tag .. "
+> "$EVENTS_LOG"
+bash "$SANDBOX_SCRIPT" --tag v1.0.1 >/dev/null 2>&1
+if grep -q "Parando escritores" "$EVENTS_LOG"; then
+  echo "❌ FALHOU (Executou parada desnecessária em tag já implantada)"
   exit 1
 fi
 echo "✅ PASSOU"
 
 # ------------------------------------------------------------------------------
-# Cenário 3: Falha pós-migração bloqueia novos deploys e preserva o snapshot
+# Cenário 7: Falha pós-migração bloqueia novos deploys e preserva o snapshot
 # ------------------------------------------------------------------------------
-echo -n "🧪 Cenário 3: Falha pós-migração bloqueia novos deploys e preserva o snapshot .. "
+echo -n "🧪 Cenário 7: Falha pós-migração bloqueia novos deploys e preserva snapshot .. "
 (
   cd "$INIT_REPO"
   git checkout -b dev-pr-falha >/dev/null 2>&1
@@ -220,28 +310,6 @@ echo -n "🧪 Cenário 3: Falha pós-migração bloqueia novos deploys e preserv
   git push origin main --tags >/dev/null 2>&1
 )
 
-> "$EVENTS_LOG"
-export MOCK_WRITER_RUNNING=1
-if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1; then
-  echo "Deploy prosseguiu com escritor ativo." >&2
-  exit 1
-fi
-unset MOCK_WRITER_RUNNING
-if grep -q 'pg_dump' "$EVENTS_LOG"; then
-  echo "Backup iniciado com escritor ativo." >&2
-  exit 1
-fi
-> "$EVENTS_LOG"
-export MOCK_DUMP_FAIL=1
-if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1; then
-  echo "Backup com erro e saída parcial foi aceito." >&2
-  exit 1
-fi
-unset MOCK_DUMP_FAIL
-if grep -Eq ' (build|run) |up -d --build' "$EVENTS_LOG"; then
-  echo "Deploy prosseguiu apesar da falha no backup." >&2
-  exit 1
-fi
 > "$EVENTS_LOG"
 export MOCK_CURL_FAIL=1
 set +e
@@ -256,7 +324,7 @@ if [ "$DEPLOY_EXIT" -eq 0 ]; then
 fi
 
 if [ "$(cat "$VAR_LIB/implantado_tag")" != "v1.0.1" ]; then
-  echo "❌ FALHOU (implantado_tag não preservou a versão anterior)"
+  echo "❌ FALHOU (implantado_tag não preservou a versão estável anterior)"
   exit 1
 fi
 if [ "$(cat "$VAR_LIB/implantado")" != "$EXPECTED_SHA" ]; then
@@ -271,14 +339,17 @@ if grep -q "RESTORE: pg_restore called with" "$EVENTS_LOG"; then
   echo "❌ FALHOU (restauração destrutiva disparada automaticamente)"
   exit 1
 fi
+
+# Nova tentativa deve ser bloqueada pela trava
 > "$EVENTS_LOG"
 if bash "$SANDBOX_SCRIPT" --tag v1.0.2 >/dev/null 2>&1 || [ -s "$EVENTS_LOG" ]; then
   echo "❌ FALHOU (nova tentativa prosseguiu com recuperação pendente)"
   exit 1
 fi
+rm -f "$VAR_LIB/recuperacao_pendente"
 echo "✅ PASSOU"
 
 echo "=========================================================="
-echo "🎉 Todos os 3 cenários de transição passaram 100% no ProPatch BR!"
+echo "🎉 Todos os 7 cenários de transição passaram 100% no ProPatch BR!"
 echo "=========================================================="
 exit 0

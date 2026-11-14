@@ -18,7 +18,7 @@ for arg in "$@"; do
       ;;
     --help|-h)
       echo "Uso: ./scripts/check.sh [--quick | --fast | --full]"
-      echo "  --full (padrão): Suíte completa (Lint, Typecheck e Build de produção)"
+      echo "  --full (padrão): Suíte completa (Lint, Typecheck, Testes de Infra e Build de produção)"
       echo "  --quick / --fast: Modo rápido de desenvolvimento (Lint e Typecheck - NÃO autoriza push)"
       exit 0
       ;;
@@ -34,20 +34,29 @@ echo "  ProPatch BR Quality Gate — scripts/check.sh"
 echo "  Modo Selecionado: $MODE"
 echo "================================================="
 
-# [1/3] Linter (ESLint)
-echo "[1/3] Checando Linting (ESLint)..."
+# [1/5] Linter (ESLint)
+echo "[1/5] Checando Linting (ESLint)..."
 npm run lint
 
-# [2/3] Tipagem TypeScript (tsc --noEmit)
-echo "[2/3] Checando Tipagem TypeScript (tsc --noEmit)..."
+# [2/5] Tipagem TypeScript (tsc --noEmit)
+echo "[2/5] Checando Tipagem TypeScript (tsc --noEmit)..."
 npm run typecheck
 
-# [3/3] Build Next.js
+# [3/5] Testes de Governança SemVer
+echo "[3/5] Executando Testes de Governança de Deploy..."
+./tests/infra/test-deploy-governance.sh
+
+# [4/5] Testes de Transição e Baseline
+echo "[4/5] Executando Testes de Transição e Baseline..."
+./tests/infra/test-vps-deploy-transition.sh
+./tests/infra/test-baseline-migration.sh
+
+# [5/5] Build Next.js
 if [ "$MODE" = "full" ]; then
-  echo "[3/3] Compilação e Build Next.js de Produção..."
+  echo "[5/5] Compilação e Build Next.js de Produção..."
   NEXT_TELEMETRY_DISABLED=1 NODE_ENV=production npm run build
 else
-  echo "[3/3] Build de produção pulado (--quick)."
+  echo "[5/5] Build de produção pulado (--quick)."
 fi
 
 echo "================================================="
