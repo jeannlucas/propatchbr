@@ -61,6 +61,7 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           tags: tag:ci-deploy
+          userspace-networking: false
 
       - name: Validar Conexao Privada e Confianca no Certificado HTTPS
         shell: bash
