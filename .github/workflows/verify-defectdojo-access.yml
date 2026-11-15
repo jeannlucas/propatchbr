@@ -68,7 +68,7 @@ jobs:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
         run: |
           echo "Disparando requisicao HTTPS com validacao estrita de certificado..."
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$DOJO_URL/login?next=/")
+          RESPONSE_CODE=$(curl -s --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -o /dev/null -w "%{http_code}" "$DOJO_URL/login?next=/")
           echo "HTTP Response Code via Tailscale: $RESPONSE_CODE"
           if [ "$RESPONSE_CODE" = "200" ] || [ "$RESPONSE_CODE" = "302" ]; then
             echo "OK: Conexao HTTPS autenticada via Tailscale com certificado TLS 100% valido e confiavel."
@@ -84,7 +84,7 @@ jobs:
           DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
         run: |
           echo "Consultando dados da conta de servico..."
-          USER_PROFILE=$(curl -sf -H "Authorization: Token $DOJO_TOKEN" "$DOJO_URL/api/v2/user_profile/")
+          USER_PROFILE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -H "Authorization: Token $DOJO_TOKEN" "$DOJO_URL/api/v2/user_profile/")
           IS_SUPERUSER=$(echo "$USER_PROFILE" | jq -r '.user.is_superuser // false')
           USERNAME=$(echo "$USER_PROFILE" | jq -r '.user.username')
           echo "Usuario autenticado: $USERNAME (is_superuser: $IS_SUPERUSER)"
@@ -105,7 +105,7 @@ jobs:
           trivy fs --format json -o trivy-propatch-ci.json package.json
 
           echo "Importando scan para ProPatch BR via API v2..."
-          RESPONSE=$(curl -sf -X POST "$DOJO_URL/api/v2/import-scan/" \
+          RESPONSE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -X POST "$DOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DOJO_TOKEN" \
             -F "scan_type=Trivy Scan" \
             -F "product_name=ProPatch BR" \
