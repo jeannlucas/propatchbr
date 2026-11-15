@@ -16,7 +16,9 @@ jobs:
   verify-access:
     name: Validar Acesso Privado e Importacao DefectDojo
     runs-on: ubuntu-latest
-    environment: production
+    permissions:
+      id-token: write
+      contents: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,11 +27,12 @@ jobs:
         shell: bash
         run: |
           missing=()
-          [ -z "${{ secrets.TAILSCALE_AUTHKEY }}" ] && missing+=("TAILSCALE_AUTHKEY")
+          [ -z "${{ secrets.TS_OAUTH_CLIENT_ID }}" ] && missing+=("TS_OAUTH_CLIENT_ID")
+          [ -z "${{ secrets.TS_AUDIENCE }}" ] && missing+=("TS_AUDIENCE")
           [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ] && missing+=("DEFECTDOJO_TOKEN")
           [ -z "${{ secrets.DEFECTDOJO_URL }}" ] && missing+=("DEFECTDOJO_URL")
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Segredos ausentes: ${missing[*]}"
+            echo "::error::Segredos ausentes nos Secrets do repositorio: ${missing[*]}"
             exit 1
           fi
 
@@ -56,12 +59,12 @@ jobs:
             exit 1
           fi
 
-      - name: Conectar a Tailscale (Rede Mesh Privada)
-        uses: tailscale/github-action@v3
+      - name: Conectar a Tailscale via OIDC (Rede Mesh Privada)
+        uses: tailscale/github-action@v4
         with:
-          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-          tags: tag:ci-deploy
-          userspace-networking: false
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TS_AUDIENCE }}
+          tags: tag:ci-defectdojo
 
       - name: Validar Conexao Privada e Confianca no Certificado HTTPS
         shell: bash
@@ -78,7 +81,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validar Escopo da Conta de Servico (ci-scanner)
+      - name: Validar Escopo e Menor Privilegio da Conta de Servico (ci-scanner)
         shell: bash
         env:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
@@ -92,26 +95,40 @@ jobs:
           if [ "$IS_SUPERUSER" = "false" ]; then
             echo "OK: Conta de servico opera com privilegios minimos (is_superuser: false)."
           else
-            echo "::error::Conta possui privilegios de superusuario!"
+            echo "::error::Conta possui privilegios de superusuario indevidos!"
             exit 1
           fi
 
-      - name: Executar Varredura Trivy e Importacao no DefectDojo
+          echo "Verificando restricao de operacoes administrativas (Fail-Closed)..."
+          HTTP_STATUS=$(curl -s --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -o /dev/null -w "%{http_code}" -X POST "$DOJO_URL/api/v2/users/" \
+            -H "Authorization: Token $DOJO_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{"username":"probe_admin"}')
+          echo "Tentativa de escrita administrativa retornou HTTP: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" = "403" ] || [ "$HTTP_STATUS" = "401" ]; then
+            echo "OK: Conta de servico estritamente bloqueada contra acoes administrativas."
+          else
+            echo "::error::Resposta inesperada para tentativa de criacao de usuario: $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Executar Varredura Trivy e Importacao no DefectDojo (Destino Isolado)
         shell: bash
         env:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
           DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
         run: |
+          echo "Instalando Trivy no runner..."
           curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
           trivy fs --format json -o trivy-propatch-ci.json package.json
 
-          echo "Importando scan para ProPatch BR via API v2..."
+          echo "Importando scan para ProPatch BR via API v2 em destino de teste separado (CI Security Pipeline)..."
           RESPONSE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -X POST "$DOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DOJO_TOKEN" \
             -F "scan_type=Trivy Scan" \
             -F "product_name=ProPatch BR" \
             -F "engagement_name=CI Security Pipeline" \
-            -F "test_title=GitHub Actions CI Probe - ProPatch BR" \
+            -F "test_title=GitHub Actions OIDC Probe - ProPatch BR" \
             -F "close_old_findings=false" \
             -F "active=true" \
             -F "verified=true" \
