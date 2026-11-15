@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fluxo de Desenvolvimento e Deploy Canônico VPS — BigDev.Z</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        darkMode: true,
+        background: '#0f172a',
+        primaryColor: '#0284c7',
+        primaryTextColor: '#f8fafc',
+        primaryBorderColor: '#38bdf8',
+        lineColor: '#94a3b8',
+        secondaryColor: '#059669',
+        tertiaryColor: '#1e293b'
+      },
+      flowchart: {
+        useMaxWidth: false,
+        htmlLabels: true,
+        curve: 'basis'
+      }
+    });
+  </script>
+  <style>
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+    .mermaid svg {
+      max-width: 100% !important;
+      height: auto;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-cyan-500 selection:text-white">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-tr from-cyan-500 to-emerald-500 flex items-center justify-center font-bold text-white shadow-lg shadow-cyan-500/20">
+          BZ
+        </div>
+        <div>
+          <h1 class="text-base font-bold text-white tracking-wide">BigDev.Z Architecture</h1>
+          <p class="text-xs text-slate-400">Fluxo Canônico de Desenvolvimento & Deploy Contínuo VPS</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-2">
+        <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 animate-pulse"></span>
+          Produção Ativa (v1.0.2)
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+    <!-- Introdução -->
+    <div class="bg-slate-900/50 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+      <div class="absolute -right-10 -bottom-10 w-64 h-64 bg-cyan-500/5 rounded-full blur-3xl pointer-events-none"></div>
+      <div class="max-w-3xl">
+        <h2 class="text-2xl font-bold text-white tracking-tight mb-2">Visão Geral do Ciclo de Vida do Software</h2>
+        <p class="text-slate-300 text-sm leading-relaxed">
+          Este diagrama documenta a arquitetura canônica adotada em todos os projetos da organização (Ethos, ProPatch BR, Finance, Delro, ERP).
+          O fluxo é orientado a <strong>Soberania Humana</strong>, <strong>Backpressure Determinístico Local</strong>, <strong>SemVer Obrigatório</strong> e <strong>Deploy Atômico Fail-Closed na VPS</strong> via rede privada Tailscale.
+        </p>
+      </div>
+    </div>
+
+    <!-- Diagrama Mermaid Interativo -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl overflow-hidden">
+      <div class="flex items-center justify-between pb-4 border-b border-slate-800/80 mb-6">
+        <div>
+          <h3 class="text-lg font-semibold text-white">Mapa Completo do Fluxo Ponta a Ponta</h3>
+          <p class="text-xs text-slate-400">Do código no Mac até a subida na VPS via Caddy e PostgreSQL</p>
+        </div>
+        <div class="flex space-x-2 text-xs">
+          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">Mac Local</span>
+          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">GitHub Actions</span>
+          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">Tailscale</span>
+          <span class="px-2 py-1 rounded bg-slate-800 text-slate-300 border border-slate-700">VPS Docker</span>
+        </div>
+      </div>
+
+      <!-- Canvas Mermaid -->
+      <div class="overflow-x-auto p-4 bg-slate-950/60 rounded-xl border border-slate-800/60 flex justify-center">
+        <div class="mermaid">
+flowchart TD
+    %% Subgrafo 1: Mac Local
+    subgraph MAC ["💻 Máquina de Desenvolvimento (Mac Local)"]
+        direction TB
+        M1["1. Sincronização Inicial<br/><code>git pull --rebase origin/dev</code>"] --> M2["2. Isolamento da Tarefa<br/><code>feature/*</code> ou <code>fix/*</code> (Worktree)"]
+        M2 --> M3["3. Ciclo TDD & Delta Provado<br/>(Teste Vermelho ➔ Código Verde ➔ Refatoração)"]
+        M3 --> M4["4. Merge Local na branch <code>dev</code>"]
+        M4 --> M5{"5. Barreira Pré-Push<br/><code>scripts/check.sh</code>"}
+        M5 -- "Falha em checks" --> M3
+        M5 -- "100% Verde (Lint, Tipos, Infra, Build)" --> M6["6. Push Imediato<br/><code>git push origin dev</code>"]
+    end
+
+    %% Subgrafo 2: GitHub CI & Governança
+    subgraph GH ["🐙 GitHub (Integração Contínua & Governança)"]
+        direction TB
+        G1["PR de <code>dev</code> para <code>main</code>"] --> G2["CI Quality Gate Automatizado<br/>(Lint, Typecheck & Next.js Build)"]
+        G2 --> G3{"Revisão & Aprovação Humana<br/>(Soberania de Jeann Lucas)"}
+        G3 -- "Aprovado" --> G4["Merge Commit na branch <code>main</code><br/>(Lote auditável no histórico)"]
+        G4 --> G5["Criação de Tag SemVer Anotada<br/><code>git tag -a v1.0.X & push</code>"]
+    end
+
+    %% Subgrafo 3: GitHub Actions Deploy Runner
+    subgraph ACTIONS ["⚡ GitHub Actions (Workflow de Produção)"]
+        direction TB
+        A1["Gatilho Exclusivo: Tag SemVer<br/>(Ambiente <code>production</code> restrito)"] --> A2["Validação de Governança SemVer<br/>(PR auditado, commit SHA correspondente)"]
+        A2 --> A3["Verificação de Isolamento de Segredos<br/>(VPS_SSH_KEY, VPS_SSH_USER, TAILSCALE)"]
+        A3 --> A4["Conexão à VPN Mesh Privada<br/>(Tailscale 100.64.0.0/10)"]
+        A4 --> A5["Disparo do Deploy via SSH Restrito<br/>(Passa exclusivamente a tag como argumento)"]
+    end
+
+    %% Subgrafo 4: VPS Segurança e Wrapper
+    subgraph VPS_GATE ["🛡️ Entrada de Segurança na VPS"]
+        direction TB
+        V1["authorized_keys Restrito<br/><code>command='/usr/local/bin/propatch-deploy'</code><br/><code>from='100.64.0.0/10',restrict</code>"] --> V2{"Wrapper SSH<br/>Validação Estrita Regex SemVer"}
+        V2 -- "Comando Inválido ou Injeção" --> V2_FAIL["Bloqueio Imediato Fail-Closed"]
+        V2 -- "Tag Válida (ex: v1.0.2)" --> V3["Invoca Script Oficial<br/><code>/srv/propatchbr/scripts/vps-deploy.sh</code>"]
+    end
+
+    %% Subgrafo 5: Ritual Canônico VPS
+    subgraph VPS_EXEC ["⚙️ Ritual Canônico de Deploy na VPS"]
+        direction TB
+        E0{"Checagem de Travas<br/><code>recuperacao_pendente</code>"} -- "Trava Ativa" --> E_LOCK["Aborta Deploy (Protege Banco)"]
+        E0 -- "Livre" --> E1["Pré-Voo do Banco PostgreSQL<br/><code>pg_isready</code> + <code>SELECT 1</code>"]
+        E1 --> E2["Atualização do Código<br/><code>git reset --hard TARGET_SHA</code>"]
+        E2 --> E3["Build da Imagem Docker Alvo<br/><code>docker compose build</code>"]
+        E3 --> E4{"Pré-Voo de Dependências<br/>(require postgres & drizzle-orm)"}
+        E4 -- "Dependência Ausente" --> E4_FAIL["Aborta ANTES de parar app<br/>(Zero Downtime & Zero Erro de Banco)"]
+        E4 -- "100% OK" --> E5["Preservação da Imagem Rollback<br/><code>ceac63f6ad8c</code> (Legacy Backup)"]
+        E5 --> E6["Parada dos Escritores<br/><code>docker compose stop propatch-app</code>"]
+        E6 --> E7["Snapshot Atômico do PostgreSQL<br/><code>pg_dump</code> + Verificação SHA256"]
+        E7 --> E8["Execução de Migrações Drizzle<br/>(Baseline seguro ou migrações normais)"]
+        E8 --> E9["Subida dos Containers Atualizados<br/><code>docker compose up -d</code>"]
+        E9 --> E10{"Healthcheck Loopback<br/>(Porta 3002 responde 200?)"}
+        E10 -- "Falha" --> E_ROLL["Protocolo de Rollback Automático<br/>(Restaura Imagem Anterior / Trava)"]
+        E10 -- "Sucesso 200" --> E11["Atualização dos Marcadores<br/><code>implantado = SHA</code> | <code>tag = v1.0.X</code>"]
+    end
+
+    %% Subgrafo 6: Servidores Ativos & Acesso Externo
+    subgraph PROD ["🌐 Camada de Produção (VPS Docker & Proxy)"]
+        direction TB
+        CADDY["Caddy Reverse Proxy<br/>(SSL/TLS Automático Let's Encrypt)"] --> APP["Container propatch_app<br/>(Next.js Standalone :3000)"]
+        APP --> PG[("PostgreSQL 16 Container<br/>(Volume Persistente de Dados)")]
+        APP --> STORAGE[("Volume de Patches<br/>(/app/storage/patches)")]
+        USER["Usuário Final / Navegador"] -->|HTTPS Porta 443| CADDY
+    end
+
+    %% Conexões entre subgrafos
+    M6 --> G1
+    G5 --> A1
+    A5 --> V1
+    V3 --> E0
+    E11 --> PROD
+        </div>
+      </div>
+    </div>
+
+    <!-- Os 5 Pilares de Segurança e Confiabilidade -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+
+      <!-- Pilar 1 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-cyan-500/50 transition">
+        <div class="w-8 h-8 rounded bg-cyan-500/10 text-cyan-400 flex items-center justify-center font-bold mb-3">1</div>
+        <h4 class="text-base font-semibold text-white mb-2">Backpressure Determinístico</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Nenhum commit é publicado sem que a suíte completa rode localmente no Mac através do hook <code class="text-cyan-300">.githooks/pre-push</code>. O script <code class="text-cyan-300">scripts/check.sh</code> valida ESLint, TypeScript, testes de governança, banco efêmero em Docker e build Next.js.
+        </p>
+      </div>
+
+      <!-- Pilar 2 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-emerald-500/50 transition">
+        <div class="w-8 h-8 rounded bg-emerald-500/10 text-emerald-400 flex items-center justify-center font-bold mb-3">2</div>
+        <h4 class="text-base font-semibold text-white mb-2">Soberania Humana & SemVer</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          O deploy de produção só existe atrelado a uma tag SemVer formal (<code class="text-emerald-300">v1.0.X</code>) emitida exclusivamente após o PR de <code class="text-emerald-300">dev</code> para <code class="text-emerald-300">main</code> ser aprovado por Jeann Lucas. Deploys diretos por push de branch são estritamente bloqueados.
+        </p>
+      </div>
+
+      <!-- Pilar 3 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-purple-500/50 transition">
+        <div class="w-8 h-8 rounded bg-purple-500/10 text-purple-400 flex items-center justify-center font-bold mb-3">3</div>
+        <h4 class="text-base font-semibold text-white mb-2">Tailscale & Wrapper SSH Restrito</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          A VPS não expõe SSH público. O runner do GitHub se conecta via Tailscale Mesh privada. A chave SSH exclusiva está travada em <code class="text-purple-300">authorized_keys</code> com <code class="text-purple-300">command="/usr/local/bin/propatch-deploy"</code>, rejeitando comandos arbitrários e aceitando apenas uma tag SemVer válida.
+        </p>
+      </div>
+
+      <!-- Pilar 4 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-amber-500/50 transition">
+        <div class="w-8 h-8 rounded bg-amber-500/10 text-amber-400 flex items-center justify-center font-bold mb-3">4</div>
+        <h4 class="text-base font-semibold text-white mb-2">Pré-Voo Fail-Closed</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Antes de derrubar o app em produção ou alterar qualquer tabela, a VPS compila a imagem nova e testa o carregamento das dependências críticas (<code class="text-amber-300">postgres</code> e <code class="text-amber-300">drizzle-orm</code>). Se houver erro de empacotamento, o deploy aborta com <strong>zero downtime</strong>.
+        </p>
+      </div>
+
+      <!-- Pilar 5 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-rose-500/50 transition">
+        <div class="w-8 h-8 rounded bg-rose-500/10 text-rose-400 flex items-center justify-center font-bold mb-3">5</div>
+        <h4 class="text-base font-semibold text-white mb-2">Snapshot & Rollback Seguro</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          Antes de qualquer migração, os escritores são pausados e um snapshot integral com checksum SHA256 é registrado em <code class="text-rose-300">/srv/propatchbr/backups/db/</code>. Em caso de falha de inicialização, o script reativa a versão anterior imediatamente.
+        </p>
+      </div>
+
+      <!-- Pilar 6 -->
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 hover:border-blue-500/50 transition">
+        <div class="w-8 h-8 rounded bg-blue-500/10 text-blue-400 flex items-center justify-center font-bold mb-3">6</div>
+        <h4 class="text-base font-semibold text-white mb-2">Preservação de Volumes</h4>
+        <p class="text-xs text-slate-400 leading-relaxed">
+          O banco de dados (<code class="text-blue-300">propatchbr_postgres_data</code>) e o armazenamento de binários ISO (<code class="text-blue-300">propatchbr_patches_data</code>) utilizam volumes persistentes desacoplados do ciclo de vida das imagens, garantindo que deploys e reboots nunca apaguem dados de clientes.
+        </p>
+      </div>
+
+    </div>
+
+    <!-- Tabela Resumo dos Comandos do Desenvolvedor -->
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+      <h3 class="text-lg font-semibold text-white mb-4">Guia Rápido do Desenvolvedor: Como Trabalhar no Dia a Dia</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs text-slate-300 border-collapse">
+          <thead>
+            <tr class="border-b border-slate-800 text-slate-400 font-medium">
+              <th class="py-3 px-4">Etapa</th>
+              <th class="py-3 px-4">Comando Canônico</th>
+              <th class="py-3 px-4">O que acontece por trás?</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60 font-mono">
+            <tr>
+              <td class="py-3 px-4 text-cyan-400 font-sans font-medium">1. Iniciar Tarefa</td>
+              <td class="py-3 px-4 bg-slate-950/40">git checkout dev && git pull && git checkout -b feature/minha-feature</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Sincroniza a branch base e isola a alteração em branch dedicada.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-cyan-400 font-sans font-medium">2. Desenvolver & Testar</td>
+              <td class="py-3 px-4 bg-slate-950/40">npm run dev (ou ./scripts/check.sh --quick)</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Validações rápidas de linter e tipos durante o desenvolvimento.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-cyan-400 font-sans font-medium">3. Integrar na dev</td>
+              <td class="py-3 px-4 bg-slate-950/40">git checkout dev && git merge --no-ff feature/minha-feature</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Integra o código na dev local para validação integrada pré-push.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-cyan-400 font-sans font-medium">4. Publicar na dev</td>
+              <td class="py-3 px-4 bg-slate-950/40">git push origin dev</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Dispara a barreira do pre-push hook que roda <code>./scripts/check.sh</code> 100% verde.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-emerald-400 font-sans font-medium">5. Solicitar Promoção</td>
+              <td class="py-3 px-4 bg-slate-950/40">gh pr create --base main --head dev</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Abre Pull Request no GitHub. O CI roda testes de compilação.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-emerald-400 font-sans font-medium">6. Aprovação & Merge</td>
+              <td class="py-3 px-4 bg-slate-950/40">gh pr merge &lt;PR&gt; --merge</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Cria merge commit na <code>main</code> com rastreabilidade auditável.</td>
+            </tr>
+            <tr>
+              <td class="py-3 px-4 text-purple-400 font-sans font-medium">7. Disparar Deploy VPS</td>
+              <td class="py-3 px-4 bg-slate-950/40">git tag -a v1.0.X &lt;COMMIT&gt; -m "Release v1.0.X" && git push origin v1.0.X</td>
+              <td class="py-3 px-4 font-sans text-slate-400">Dispara o pipeline automatizado: Tailscale ➔ SSH Restrito ➔ Deploy VPS.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
+    BigDev.Z Engineering Guidelines • Arquitetura Homologada por Jeann Lucas • 2026
+  </footer>
+
+</body>
+</html>
