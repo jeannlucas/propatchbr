@@ -1,0 +1,115 @@
+name: Verify DefectDojo Access (Private Tailscale)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: verify-defectdojo-access
+  cancel-in-progress: false
+
+jobs:
+  verify-access:
+    name: Validar Acesso Privado e Importacao DefectDojo
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validar Segredos de Seguranca
+        shell: bash
+        run: |
+          missing=()
+          [ -z "${{ secrets.TAILSCALE_AUTHKEY }}" ] && missing+=("TAILSCALE_AUTHKEY")
+          [ -z "${{ secrets.DEFECTDOJO_TOKEN }}" ] && missing+=("DEFECTDOJO_TOKEN")
+          [ -z "${{ secrets.DEFECTDOJO_URL }}" ] && missing+=("DEFECTDOJO_URL")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Segredos ausentes: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Instalar CA Raiz do Caddy no Sistema Operacional (Confianca TLS)
+        if: env.CADDY_CA != ''
+        env:
+          CADDY_CA: ${{ secrets.CADDY_ROOT_CA }}
+        run: |
+          echo "$CADDY_CA" | sudo tee /usr/local/share/ca-certificates/caddy-internal.crt
+          sudo update-ca-certificates
+
+      - name: Provar Inacessibilidade Externa (Fora da Tailscale)
+        shell: bash
+        run: |
+          echo "Testando requisicao para https://bigdevz-vps.tailf827e2.ts.net antes de conectar a Tailscale..."
+          set +e
+          curl -m 5 -sI https://bigdevz-vps.tailf827e2.ts.net
+          EXIT_CODE=$?
+          set -e
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "OK: Painel e API estao 100% inacessiveis na internet publica (exit code $EXIT_CODE)."
+          else
+            echo "::error::Falha de isolamento: DefectDojo respondeu na internet publica!"
+            exit 1
+          fi
+
+      - name: Conectar a Tailscale (Rede Mesh Privada)
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          tags: tag:ci-deploy
+
+      - name: Validar Conexao Privada e Confianca no Certificado HTTPS
+        shell: bash
+        env:
+          DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+        run: |
+          echo "Disparando requisicao HTTPS com validacao estrita de certificado..."
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$DOJO_URL/login?next=/")
+          echo "HTTP Response Code via Tailscale: $RESPONSE_CODE"
+          if [ "$RESPONSE_CODE" = "200" ] || [ "$RESPONSE_CODE" = "302" ]; then
+            echo "OK: Conexao HTTPS autenticada via Tailscale com certificado TLS 100% valido e confiavel."
+          else
+            echo "::error::Resposta inesperada: $RESPONSE_CODE"
+            exit 1
+          fi
+
+      - name: Validar Escopo da Conta de Servico (ci-scanner)
+        shell: bash
+        env:
+          DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+        run: |
+          echo "Consultando dados da conta de servico..."
+          USER_PROFILE=$(curl -sf -H "Authorization: Token $DOJO_TOKEN" "$DOJO_URL/api/v2/user_profile/")
+          IS_SUPERUSER=$(echo "$USER_PROFILE" | jq -r '.user.is_superuser // false')
+          USERNAME=$(echo "$USER_PROFILE" | jq -r '.user.username')
+          echo "Usuario autenticado: $USERNAME (is_superuser: $IS_SUPERUSER)"
+          if [ "$IS_SUPERUSER" = "false" ]; then
+            echo "OK: Conta de servico opera com privilegios minimos (is_superuser: false)."
+          else
+            echo "::error::Conta possui privilegios de superusuario!"
+            exit 1
+          fi
+
+      - name: Executar Varredura Trivy e Importacao no DefectDojo
+        shell: bash
+        env:
+          DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          trivy fs --format json -o trivy-propatch-ci.json package.json
+
+          echo "Importando scan para ProPatch BR via API v2..."
+          RESPONSE=$(curl -sf -X POST "$DOJO_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DOJO_TOKEN" \
+            -F "scan_type=Trivy Scan" \
+            -F "product_name=ProPatch BR" \
+            -F "engagement_name=CI Security Pipeline" \
+            -F "test_title=GitHub Actions CI Probe - ProPatch BR" \
+            -F "close_old_findings=false" \
+            -F "active=true" \
+            -F "verified=true" \
+            -F "file=@trivy-propatch-ci.json")
+
+          TEST_ID=$(echo "$RESPONSE" | jq -r '.test')
+          echo "OK: Varredura importada no DefectDojo com Test ID: $TEST_ID"
