@@ -81,7 +81,7 @@ jobs:
             exit 1
           fi
 
-      - name: Validar Escopo e Menor Privilegio da Conta de Servico (ci-scanner)
+      - name: Validar Escopo e Menor Privilegio da Conta de Servico
         shell: bash
         env:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
@@ -90,10 +90,11 @@ jobs:
           echo "Consultando dados da conta de servico..."
           USER_PROFILE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -H "Authorization: Token $DOJO_TOKEN" "$DOJO_URL/api/v2/user_profile/")
           IS_SUPERUSER=$(echo "$USER_PROFILE" | jq -r '.user.is_superuser // false')
+          IS_STAFF=$(echo "$USER_PROFILE" | jq -r '.user.is_staff // false')
           USERNAME=$(echo "$USER_PROFILE" | jq -r '.user.username')
-          echo "Usuario autenticado: $USERNAME (is_superuser: $IS_SUPERUSER)"
+          echo "Usuario autenticado: $USERNAME (is_superuser: $IS_SUPERUSER, is_staff: $IS_STAFF)"
           if [ "$IS_SUPERUSER" = "false" ]; then
-            echo "OK: Conta de servico opera com privilegios minimos (is_superuser: false)."
+            echo "OK: Conta de servico opera sem privilegios de superusuario (is_superuser: false)."
           else
             echo "::error::Conta possui privilegios de superusuario indevidos!"
             exit 1
@@ -109,6 +110,29 @@ jobs:
             echo "OK: Conta de servico estritamente bloqueada contra acoes administrativas."
           else
             echo "::error::Resposta inesperada para tentativa de criacao de usuario: $HTTP_STATUS"
+            exit 1
+          fi
+
+      - name: Validar Bloqueio de Importacao em Outro Produto (Cross-Product Isolation)
+        shell: bash
+        env:
+          DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
+          DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+        run: |
+          echo "Testando tentativa de importacao no produto nao autorizado 'ERP'..."
+          echo '{"SchemaVersion":2,"ArtifactName":"test","Results":[]}' > probe-scan.json
+          HTTP_STATUS=$(curl -s --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -o /dev/null -w "%{http_code}" -X POST "$DOJO_URL/api/v2/import-scan/" \
+            -H "Authorization: Token $DOJO_TOKEN" \
+            -F "scan_type=Trivy Scan" \
+            -F "product_name=ERP" \
+            -F "engagement_name=CI Security Pipeline" \
+            -F "test_title=Probe Unauthorized" \
+            -F "file=@probe-scan.json")
+          echo "Tentativa de importacao cruzada retornou HTTP: $HTTP_STATUS"
+          if [ "$HTTP_STATUS" = "400" ] || [ "$HTTP_STATUS" = "403" ] || [ "$HTTP_STATUS" = "404" ]; then
+            echo "OK: Importacao no produto 'ERP' estritamente rejeitada para a conta do ProPatch BR."
+          else
+            echo "::error::Falha de isolamento: Conta conseguiu importar em produto nao autorizado! (HTTP $HTTP_STATUS)"
             exit 1
           fi
 
