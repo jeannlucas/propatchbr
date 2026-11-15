@@ -146,35 +146,39 @@ jobs:
         run: |
           python3 scripts/eval-promotion-policy.py \
             --scan trivy-propatchbr-ci.json \
+            --baseline security/baseline.json \
             --mode audit \
             --output-summary $GITHUB_STEP_SUMMARY
 
-      - name: Importar Varredura no DefectDojo (Destino Isolado)
+      - name: Reimportar Varredura no DefectDojo (Destino Estavel)
         shell: bash
         env:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
           DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
         run: |
-          echo "Importando scan para ProPatch BR via API v2 em destino de teste separado (CI Security Pipeline)..."
+          echo "Reimportando scan para ProPatch BR via API v2 reimport-scan no destino de teste estavel (Test ID 30)..."
           set +e
-          RESPONSE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -X POST "$DOJO_URL/api/v2/import-scan/" \
+          RESPONSE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -X POST "$DOJO_URL/api/v2/reimport-scan/" \
             -H "Authorization: Token $DOJO_TOKEN" \
             -F "scan_type=Trivy Scan" \
-            -F "product_name=ProPatch BR" \
-            -F "engagement_name=CI Security Pipeline" \
-            -F "test_title=GitHub Actions Scan - ProPatch BR" \
-            -F "close_old_findings=false" \
+            -F "test=30" \
             -F "active=true" \
-            -F "verified=true" \
+            -F "verified=false" \
+            -F "close_old_findings=true" \
             -F "file=@trivy-propatchbr-ci.json")
           CURL_EXIT=$?
           set -e
 
           if [ $CURL_EXIT -ne 0 ] || [ -z "$RESPONSE" ]; then
-            echo "::warning::Falha ao importar varredura no DefectDojo (exit code $CURL_EXIT). O relatorio JSON foi preservado como artefato do job."
+            echo "::warning::Falha ao reimportar varredura no DefectDojo (exit code $CURL_EXIT). O relatorio JSON foi preservado como artefato privado do job."
           else
-            TEST_ID=$(echo "$RESPONSE" | jq -r '.test // empty')
-            echo "OK: Varredura importada no DefectDojo com Test ID: $TEST_ID"
+            TEST_ID=$(echo "$RESPONSE" | jq -r '.test // .test_id // empty')
+            PRODUCT_ID=$(echo "$RESPONSE" | jq -r '.product_id // empty')
+            echo "OK: Varredura reimportada com sucesso no DefectDojo no Test ID estavel: $TEST_ID (Product ID: $PRODUCT_ID)"
+            if [ "$TEST_ID" != "30" ]; then
+              echo "::error::Test ID inesperado retornado pela API: $TEST_ID (esperava 30)"
+              exit 1
+            fi
           fi
 
       - name: Preservar Relatorio de Seguranca como Artefato Privado

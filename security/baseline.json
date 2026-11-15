@@ -1,0 +1,30 @@
+{
+  "product": "ProPatch BR",
+  "environment": "dev",
+  "scope": ".",
+  "scanner": "Trivy Scan",
+  "description": "Linha de base de seguranca aprovada para ambiente de desenvolvimento (ProPatch BR).",
+  "approved_criticals": [
+    {
+      "cve": "GHSA-2464-fhr4-w9xw",
+      "pkg": "next",
+      "installed": "16.3.5",
+      "fixed": "15.5.28, 16.4.1",
+      "reason": "Triagem: Next.js RCE em otimizacao SVG. Endpoint nao exposto a uploads arbitrarios de SVG no dev. Planejado upgrade para 16.4.1."
+    },
+    {
+      "cve": "GHSA-673q-mjm6-r5xr",
+      "pkg": "next",
+      "installed": "16.3.5",
+      "fixed": "16.4.1",
+      "reason": "Triagem: Next.js RCE em 'use cache' com typed arrays. Recurso experimental nao utilizado no ProPatch BR. Planejado upgrade para 16.4.1."
+    },
+    {
+      "cve": "GHSA-vcvr-r3jv-pc5j",
+      "pkg": "next",
+      "installed": "16.3.5",
+      "fixed": "16.3.6",
+      "reason": "Triagem: Next.js RCE em next/og ImageResponse. Rotas de geracao dinamica OG nao utilizadas no ProPatch BR. Planejado upgrade para 16.4.1."
+    }
+  ]
+}

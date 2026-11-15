@@ -5,7 +5,10 @@ Motor de Avaliação de Política de Promoção de Segurança — BigDev.Z & Mon
 Regra Canônica:
 - Bloqueia novas vulnerabilidades CRÍTICAS que possuam correção disponível (FixedVersion).
 - Achados conhecidos já aceitos na linha de base de produção (baseline) permanecem registrados e não bloqueiam.
-- Erros de execução do scanner ou arquivos corrompidos são tratados como falha estrita (Fail-Closed).
+- A linha de base compara a vulnerabilidade pelo ID (CVE/GHSA) E pelo componente afetado (pacote),
+  garantindo que um CVE conhecido em um componente não oculte uma nova ocorrência em outro.
+- Erros de execução do scanner ou arquivos corrompidos/ausentes são tratados como falha estrita (Fail-Closed).
+- Linha de base ausente ou corrompida em modo enforce bloqueia a promoção (Fail-Closed).
 - Suporta modos 'audit' (modo informativo) e 'enforce' (modo bloqueante).
 """
 
@@ -13,53 +16,92 @@ import sys
 import os
 import json
 import argparse
-from typing import Set, Dict, Any, List
+from typing import Set, Tuple, Dict, Any, List, Optional
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Avaliar politica de promocao de seguranca (Trivy / DefectDojo)")
     parser.add_argument("--scan", required=True, help="Caminho do arquivo JSON de saida do Trivy")
-    parser.add_argument("--baseline", help="Caminho do arquivo JSON com CVEs aprovadas na linha de base")
+    parser.add_argument("--baseline", help="Caminho do arquivo JSON com CVEs e componentes aprovados na linha de base")
     parser.add_argument("--mode", choices=["audit", "enforce"], default="audit", help="Modo de operacao: audit (informativo) ou enforce (bloqueante)")
     parser.add_argument("--output-summary", help="Arquivo markdown para salvar o resumo da avaliacao")
     return parser.parse_args()
 
-def load_baseline(baseline_path: str) -> Set[str]:
+def load_baseline(baseline_path: Optional[str], mode: str, summary_file: Optional[str]) -> Set[Tuple[str, str]]:
+    """
+    Carrega a linha de base e retorna um conjunto de tuplas (vulnerability_id, package_name).
+    Em modo enforce, se baseline_path for especificado e falhar, encerra com Fail-Closed (exit 1).
+    """
     if not baseline_path:
         return set()
+
     if not os.path.exists(baseline_path):
-        print(f"⚠️ Aviso: Arquivo de baseline '{baseline_path}' nao encontrado. Considerando baseline vazia.")
-        return set()
+        msg = f"❌ ERRO FATAL: Arquivo de linha de base '{baseline_path}' nao encontrado."
+        if mode == "enforce":
+            print(msg, file=sys.stderr)
+            if summary_file:
+                with open(summary_file, "w", encoding="utf-8") as f:
+                    f.write("### ❌ Falha no Quality Gate de Seguranca\n\nLinha de base indisponivel ou ausente em modo enforce (Fail-Closed).\n")
+            sys.exit(1)
+        else:
+            print(f"⚠️ Aviso: Arquivo de baseline '{baseline_path}' nao encontrado. Considerando baseline vazia.")
+            return set()
+
     try:
         with open(baseline_path, "r", encoding="utf-8") as f:
             data = json.load(f)
-            if isinstance(data, list):
-                cves = set()
-                for item in data:
+    except Exception as e:
+        msg = f"❌ ERRO FATAL: Falha ao decodificar JSON da baseline '{baseline_path}': {e}"
+        if mode == "enforce":
+            print(msg, file=sys.stderr)
+            if summary_file:
+                with open(summary_file, "w", encoding="utf-8") as f:
+                    f.write(f"### ❌ Falha no Quality Gate de Seguranca\n\nLinha de base corrompida ({e}) em modo enforce (Fail-Closed).\n")
+            sys.exit(1)
+        else:
+            print(f"⚠️ Aviso: {msg}. Considerando baseline vazia.", file=sys.stderr)
+            return set()
+
+    baseline_set: Set[Tuple[str, str]] = set()
+
+    def add_entry(cve: Any, pkg: Any = None):
+        if not cve:
+            return
+        cve_str = str(cve).strip().upper()
+        if ":" in cve_str and not pkg:
+            parts = cve_str.split(":", 1)
+            cve_str = parts[0].strip().upper()
+            pkg = parts[1].strip().lower()
+        pkg_str = str(pkg).strip().lower() if pkg else "*"
+        baseline_set.add((cve_str, pkg_str))
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, str):
+                add_entry(item)
+            elif isinstance(item, dict):
+                cve = item.get("VulnerabilityID") or item.get("cve") or item.get("id")
+                pkg = item.get("PkgName") or item.get("pkg") or item.get("component") or item.get("package")
+                add_entry(cve, pkg)
+    elif isinstance(data, dict):
+        # Suporte a relatorio completo Trivy como baseline
+        for res in data.get("Results", []):
+            for v in res.get("Vulnerabilities", []):
+                vid = v.get("VulnerabilityID")
+                pkg = v.get("PkgName")
+                add_entry(vid, pkg)
+
+        # Suporte a formatos estruturados BigDev.Z / DefectDojo
+        for key in ["approved_criticals", "approved_cves", "baseline", "cves"]:
+            if key in data and isinstance(data[key], list):
+                for item in data[key]:
                     if isinstance(item, str):
-                        cves.add(item.strip().upper())
+                        add_entry(item)
                     elif isinstance(item, dict):
                         cve = item.get("VulnerabilityID") or item.get("cve") or item.get("id")
-                        if cve:
-                            cves.add(str(cve).strip().upper())
-                return cves
-            elif isinstance(data, dict):
-                cves = set()
-                # Se for formato Trivy completo
-                for res in data.get("Results", []):
-                    for v in res.get("Vulnerabilities", []):
-                        vid = v.get("VulnerabilityID")
-                        if vid:
-                            cves.add(str(vid).strip().upper())
-                # Se for dict com chave 'cves' ou 'baseline'
-                for k in ["cves", "baseline", "approved_cves"]:
-                    if k in data and isinstance(data[k], list):
-                        for c in data[k]:
-                            cves.add(str(c).strip().upper())
-                return cves
-    except Exception as e:
-        print(f"❌ Erro ao ler baseline '{baseline_path}': {e}", file=sys.stderr)
-        return set()
-    return set()
+                        pkg = item.get("PkgName") or item.get("pkg") or item.get("component") or item.get("package")
+                        add_entry(cve, pkg)
+
+    return baseline_set
 
 def evaluate():
     args = parse_args()
@@ -84,11 +126,15 @@ def evaluate():
 
     if not isinstance(scan_data, dict):
         print(f"❌ ERRO FATAL: Formato invalido de relatorio do scanner.", file=sys.stderr)
+        if args.output_summary:
+            with open(args.output_summary, "w", encoding="utf-8") as f:
+                f.write("### ❌ Falha no Quality Gate de Seguranca\n\nErro de scanner: formato de relatorio invalido (Fail-Closed).\n")
         sys.exit(1)
 
-    baseline_cves = load_baseline(args.baseline)
+    # 2. Carregamento da Linha de Base (Fail-Closed em Enforce)
+    baseline_entries = load_baseline(args.baseline, args.mode, args.output_summary)
 
-    # 2. Extracao e Classificacao de Vulnerabilidades
+    # 3. Extracao e Classificacao de Vulnerabilidades
     severity_counts = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
     actionable_criticals = []
     known_criticals = []
@@ -105,7 +151,7 @@ def evaluate():
                 severity_counts["UNKNOWN"] += 1
 
             vuln_id = (vuln.get("VulnerabilityID") or "").strip().upper()
-            pkg = vuln.get("PkgName") or "pacote"
+            pkg = (vuln.get("PkgName") or "pacote").strip()
             installed = vuln.get("InstalledVersion") or "desconhecida"
             fixed = vuln.get("FixedVersion")
 
@@ -120,12 +166,16 @@ def evaluate():
                     "title": vuln.get("Title") or ""
                 }
                 actionable_criticals.append(item)
-                if vuln_id in baseline_cves:
+
+                # Comparacao precisa: ID da vulnerabilidade E Componente afetado
+                pkg_lower = pkg.lower()
+                is_known = (vuln_id, pkg_lower) in baseline_entries or (vuln_id, "*") in baseline_entries
+                if is_known:
                     known_criticals.append(item)
                 else:
                     new_criticals.append(item)
 
-    # 3. Geracao de Relatorio Markdown
+    # 4. Geracao de Relatorio Markdown
     summary_lines = []
     summary_lines.append("### 🛡️ Relatório de Política de Promoção de Segurança")
     summary_lines.append(f"- **Modo de Execução:** `{args.mode.upper()}`")
@@ -149,7 +199,7 @@ def evaluate():
             summary_lines.append(f"| {n['id']} | `{n['pkg']}` | `{n['installed']}` | `{n['fixed']}` | `{n['target']}` |")
         summary_lines.append("")
 
-    # 4. Decisao de Promocao
+    # 5. Decisao de Promocao
     has_blocking_findings = len(new_criticals) > 0
 
     if has_blocking_findings:
