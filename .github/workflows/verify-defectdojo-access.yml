@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - dev
-    paths:
-      - '.github/workflows/verify-defectdojo-access.yml'
 
 concurrency:
   group: verify-defectdojo-access
@@ -136,27 +134,54 @@ jobs:
             exit 1
           fi
 
-      - name: Executar Varredura Trivy e Importacao no DefectDojo (Destino Isolado)
+      - name: Executar Varredura de Seguranca Trivy
+        shell: bash
+        run: |
+          echo "Instalando Trivy no runner..."
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
+          trivy fs --format json -o trivy-propatchbr-ci.json .
+
+      - name: Avaliar Politica de Promocao de Seguranca
+        shell: bash
+        run: |
+          python3 scripts/eval-promotion-policy.py \
+            --scan trivy-propatchbr-ci.json \
+            --mode audit \
+            --output-summary $GITHUB_STEP_SUMMARY
+
+      - name: Importar Varredura no DefectDojo (Destino Isolado)
         shell: bash
         env:
           DOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
           DOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
         run: |
-          echo "Instalando Trivy no runner..."
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sudo sh -s -- -b /usr/local/bin
-          trivy fs --format json -o trivy-propatch-ci.json package.json
-
           echo "Importando scan para ProPatch BR via API v2 em destino de teste separado (CI Security Pipeline)..."
+          set +e
           RESPONSE=$(curl -sf --resolve bigdevz-vps.tailf827e2.ts.net:443:100.90.8.15 -X POST "$DOJO_URL/api/v2/import-scan/" \
             -H "Authorization: Token $DOJO_TOKEN" \
             -F "scan_type=Trivy Scan" \
             -F "product_name=ProPatch BR" \
             -F "engagement_name=CI Security Pipeline" \
-            -F "test_title=GitHub Actions OIDC Probe - ProPatch BR" \
+            -F "test_title=GitHub Actions Scan - ProPatch BR" \
             -F "close_old_findings=false" \
             -F "active=true" \
             -F "verified=true" \
-            -F "file=@trivy-propatch-ci.json")
+            -F "file=@trivy-propatchbr-ci.json")
+          CURL_EXIT=$?
+          set -e
 
-          TEST_ID=$(echo "$RESPONSE" | jq -r '.test')
-          echo "OK: Varredura importada no DefectDojo com Test ID: $TEST_ID"
+          if [ $CURL_EXIT -ne 0 ] || [ -z "$RESPONSE" ]; then
+            echo "::warning::Falha ao importar varredura no DefectDojo (exit code $CURL_EXIT). O relatorio JSON foi preservado como artefato do job."
+          else
+            TEST_ID=$(echo "$RESPONSE" | jq -r '.test // empty')
+            echo "OK: Varredura importada no DefectDojo com Test ID: $TEST_ID"
+          fi
+
+      - name: Preservar Relatorio de Seguranca como Artefato Privado
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relatorio-trivy-propatchbr-dev
+          path: trivy-propatchbr-ci.json
+          retention-days: 14
+          if-no-files-found: ignore
